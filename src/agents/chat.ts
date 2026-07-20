@@ -5,8 +5,8 @@
  * decision). Honors the same provider/credential routing AND the same runner seam (runLLM) as the
  * coding roles — so a GLM-via-pi pick runs on pi here too, not silently on the Claude SDK (#108).
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { AgentDef } from "../store.js";
 import type { Provider } from "../db/providers.js";
@@ -66,6 +66,19 @@ export function resolveChatExec(
   return { model: canonicalModel(modelOverride || MODELS.sonnet), provider: null, authKind: "subscription" };
 }
 
+/**
+ * The workdir for one chat conversation. STABLE per conversation, not a throwaway temp dir: the
+ * Claude runner derives its config dir (where session transcripts live) from the workdir, so a fresh
+ * `mkdtemp` on every turn meant every stored resume id pointed at a config dir that no longer
+ * existed — the "chat session not found" failure. Same key ⇒ same dir ⇒ resume actually resumes.
+ * These dirs hold no repo checkout (chat agents never clone); they exist only to anchor the session.
+ */
+export function chatWorkdir(key: string): string {
+  const dir = join(process.cwd(), "data", "chat-wd", createHash("sha1").update(key).digest("hex").slice(0, 16));
+  try { mkdirSync(dir, { recursive: true }); } catch { /* best effort */ }
+  return dir;
+}
+
 /** Base env for a chat/orchestrator/dealer run: process env + the agency bot token. */
 export function chatBaseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
@@ -93,7 +106,7 @@ export async function runChatAgent(def: AgentDef, repo: string, number: number, 
     pushActivity(repo, number, "chat", "done", `❌ ${(e as Error).message}`);
     throw e;
   }
-  const workdir = mkdtempSync(join(tmpdir(), "chat-wd-"));
+  const workdir = chatWorkdir(`chat|${repo}|${number}|${def.name}`);
   const rc = recallWiring(repo);
   const skills = skillsPrompt(def.skills);
   const systemPrompt = `${def.persona}\n\nYou are an INTERACTIVE chat agent: no code changes, no branches, no PRs. Hold a focused conversation. ${RECALL_PROMPT}${skills ? "\n\n" + skills : ""}`;
@@ -143,7 +156,6 @@ export async function runChatAgent(def: AgentDef, repo: string, number: number, 
   } finally {
     abortRun.release();
     clearActive(repo, number);
-    try { rmSync(workdir, { recursive: true, force: true }); } catch { /* noop */ }
   }
   recordRun(repo, number, def.name, model, turns, "chat", 0);
   // The result + summary goes to GitHub (decision); the interaction itself stayed local.

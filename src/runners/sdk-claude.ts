@@ -56,10 +56,37 @@ export function claudeRunEnv(
   return env;
 }
 
+/**
+ * Does this error mean "the session id I asked to resume doesn't exist here"? A resume id is only
+ * valid inside the config dir that recorded it, so a wiped `data/claude-cfg`, a reset, or a run that
+ * moved to a different workdir all leave a stale id in the sessions table. That must NOT be fatal —
+ * the conversation simply starts fresh (the caller persists the new id, overwriting the stale one).
+ */
+export function isStaleSession(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? String(err);
+  return /no conversation found|session (id )?not found|session .* not found|invalid session/i.test(msg);
+}
+
 export class ClaudeSdkRunner implements AgentRunner {
   readonly kind = "claude-sdk";
 
   async run(req: RunRequest, emitAssistant: (message: unknown) => void): Promise<RunResult> {
+    try {
+      return await this.attempt(req, emitAssistant, req.resumeId);
+    } catch (err) {
+      // Stale resume id → retry once WITHOUT it. Losing the prior turns is a far better outcome than
+      // failing the whole chat with "session not found" and leaving the user permanently stuck (the
+      // stale id would be re-sent on every subsequent message).
+      if (req.resumeId && isStaleSession(err)) return await this.attempt(req, emitAssistant, undefined);
+      throw err;
+    }
+  }
+
+  private async attempt(
+    req: RunRequest,
+    emitAssistant: (message: unknown) => void,
+    resumeId: string | undefined,
+  ): Promise<RunResult> {
     // Translate the provider into the env this backend wants — isolated config dir per WORKDIR so
     // the SDK authenticates with THIS credential only (never a stale ~/.claude cache on a shared
     // volume). Stable (not a throwaway temp dir): the SDK stores session transcripts under the
@@ -93,7 +120,7 @@ export class ClaudeSdkRunner implements AgentRunner {
           allowedTools: req.allowedTools,
           mcpServers: (req.mcpServers ?? {}) as never,
           env,
-          ...(req.resumeId ? { resume: req.resumeId } : {}),
+          ...(resumeId ? { resume: resumeId } : {}),
           // Fully autonomous. Requires the container to run as a NON-root user (Claude Code
           // refuses --dangerously-skip-permissions as root) — see Dockerfile `USER node`.
           permissionMode: "bypassPermissions",

@@ -5,12 +5,10 @@
  * itself; that's the confirmed /orch-handoff route). DB-first: the thread lives in `orch_msg`.
  */
 import { readFileSync } from "node:fs";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendOrchMsg, listOrchThread, recentIssues, getSession, setSession, recordRun, filesFor, listEpicChildren, recentChanges } from "../store.js";
 import { activeClaims } from "../locks.js";
-import { resolveChatExec, chatBaseEnv } from "./chat.js";
+import { resolveChatExec, chatBaseEnv, chatWorkdir } from "./chat.js";
 import { runLLM } from "../runners/exec.js";
 import type { Provider } from "../db/providers.js";
 import { recallWiring, RECALL_PROMPT } from "./recall.js";
@@ -115,7 +113,7 @@ export async function runOrchestratorChat(repo: string, userText: string): Promi
     .join("\n\n");
 
   let model = "", provider = null as Provider | null, authKind = "subscription" as "subscription" | "apiKey";
-  const workdir = mkdtempSync(join(tmpdir(), "orch-wd-"));
+  const workdir = chatWorkdir(`orch|${repo}`);
   const rc = recallWiring(repo);
   const systemPrompt =
     `${loadPersona()}\n\n` +
@@ -128,47 +126,43 @@ export async function runOrchestratorChat(repo: string, userText: string): Promi
   const resumeId = getSession(repo, 0, ORCH_ROLE) || undefined;
   let text = "";
   let turns = 0;
-  try {
-    // resolveChatExec throws when no model is configured — propagate so the caller surfaces it
-    // (better than silently invoking Claude with no credential).
-    const resolved = resolveChatExec(process.env.ORCHESTRATOR_MODEL || "");
-    model = resolved.model; provider = resolved.provider; authKind = resolved.authKind;
-    const r = await runLLM(
-      {
-        task:
-          `### Conversation so far\n${history || "(this is the first message)"}\n\n` +
-          `The user just said:\n${userText}\n\n` +
-          `Respond as the Orchestrator. Discuss and advise conversationally; only append a \`handoff\` block if the user is ready to create work. ` +
-          `In the handoff block, RECOMMEND the route per issue: end each issue line with \`{workflow: @build}\` (or another workflow trigger) for multi-step work, or \`{agent: @dev}\` / \`{agent: @review}\` / another single agent when one specialist suffices.`,
-        cwd: workdir,
-        model,
-        provider,
-        authKind,
-        allowedTools: [...rc.tools],
-        mcpServers: { ...rc.servers },
-        env: chatBaseEnv(),
-        systemPrompt,
-        abort: new AbortController(),
-        resumeId,
-        maxTurns: 12,
-        tokenCap: 0,
-      },
-      (message) => {
-        const sid = (message as { session_id?: string }).session_id;
-        if (sid) setSession(repo, 0, ORCH_ROLE, sid);
-        const m = message as { type?: string; delta?: string };
-        if (m.type === "assistant") {
-          const content = (message as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content;
-          if (Array.isArray(content)) for (const b of content) if (b.type === "text" && b.text?.trim()) text += (text ? "\n\n" : "") + b.text.trim();
-        } else if (m.type === "stream_delta" && typeof m.delta === "string") {
-          // partial text not persisted — the final assistant text wins (mirrors chat.ts)
-        }
-      },
-    );
-    turns = r.turns;
-  } finally {
-    try { rmSync(workdir, { recursive: true, force: true }); } catch { /* noop */ }
-  }
+  // resolveChatExec throws when no model is configured — propagate so the caller surfaces it
+  // (better than silently invoking Claude with no credential).
+  const resolved = resolveChatExec(process.env.ORCHESTRATOR_MODEL || "");
+  model = resolved.model; provider = resolved.provider; authKind = resolved.authKind;
+  const r = await runLLM(
+    {
+      task:
+        `### Conversation so far\n${history || "(this is the first message)"}\n\n` +
+        `The user just said:\n${userText}\n\n` +
+        `Respond as the Orchestrator. Discuss and advise conversationally; only append a \`handoff\` block if the user is ready to create work. ` +
+        `In the handoff block, RECOMMEND the route per issue: end each issue line with \`{workflow: @build}\` (or another workflow trigger) for multi-step work, or \`{agent: @dev}\` / \`{agent: @review}\` / another single agent when one specialist suffices.`,
+      cwd: workdir,
+      model,
+      provider,
+      authKind,
+      allowedTools: [...rc.tools],
+      mcpServers: { ...rc.servers },
+      env: chatBaseEnv(),
+      systemPrompt,
+      abort: new AbortController(),
+      resumeId,
+      maxTurns: 12,
+      tokenCap: 0,
+    },
+    (message) => {
+      const sid = (message as { session_id?: string }).session_id;
+      if (sid) setSession(repo, 0, ORCH_ROLE, sid);
+      const m = message as { type?: string; delta?: string };
+      if (m.type === "assistant") {
+        const content = (message as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content;
+        if (Array.isArray(content)) for (const b of content) if (b.type === "text" && b.text?.trim()) text += (text ? "\n\n" : "") + b.text.trim();
+      } else if (m.type === "stream_delta" && typeof m.delta === "string") {
+        // partial text not persisted — the final assistant text wins (mirrors chat.ts)
+      }
+    },
+  );
+  turns = r.turns;
 
   const proposal = parseHandoff(text);
   const reply = stripHandoff(text) || "(no response)";
