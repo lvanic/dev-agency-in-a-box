@@ -621,6 +621,12 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .composer-icon:hover,.composer__icon:hover{background:var(--surface-2);color:var(--ink-2)}
 .composer-atts{display:flex;flex-wrap:wrap;gap:6px}
 .composer-lg{padding:14px 16px}
+/* Narrow detail pane (mobile): let the control row wrap to a second line and cap the
+   agent/model selects so all controls fit instead of overflowing horizontally (#178). */
+@container detailpane (max-width: 560px){
+  .dcompose .composer-row{flex-wrap:wrap;row-gap:6px}
+  .dcompose .composer-row .sel-cur{max-width:34vw}
+}
 
 /* ── Status line ───────────────────────────────────────────────── */
 .statusline{flex:none;display:flex;align-items:center;gap:12px;padding:6px 16px calc(6px + var(--safe-b));border-top:1px solid var(--line);background:var(--surface);font-size:11.5px;color:var(--ink-3)}
