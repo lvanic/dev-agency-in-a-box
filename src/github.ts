@@ -9,12 +9,29 @@ import { writeFileSync, unlinkSync, appendFileSync, existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sBool } from "./settings.js";
-import { maybeRedeployAfterMerge } from "./coolify.js";
+import { sBool, sStr } from "./settings.js";
 import { ghBotToken, ghUserToken } from "./creds.js";
 import { recordOutgoingComment, setCommentGhId, getConversation, recordIncident, getSetting } from "./store.js";
 
 const execFileAsync = promisify(execFile);
+
+/** True when `repo` is the agency's own repo, resolved the same way config.ts does. */
+export function isAgencyRepo(repo: string): boolean {
+  const raw = sStr("agency_repo", "AGENCY_REPO", "dev-agency").trim();
+  const full = raw.includes("/") ? raw : `${sStr("github_owner", "GITHUB_OWNER", "").trim()}/${raw}`;
+  const nameOf = (r: string) => r.split("/").pop();
+  return repo === full || nameOf(repo) === nameOf(raw);
+}
+
+/**
+ * Whether to append the `[skip ci]` tag to agency commits in `repo`. On by default (SKIP_CI) to
+ * save GitHub Actions minutes on watched product repos, but NEVER for the agency's own repo — see
+ * the long note at the hook-install site.
+ */
+export function skipCiEnabledFor(repo: string): boolean {
+  if (!sBool("skip_ci", "SKIP_CI", true)) return false;
+  return !isAgencyRepo(repo);
+}
 
 // Circuit breaker (Process Analyzer findings, dev-agency-analyzer#156-199): `gh` had zero retry/
 // back-off logic — once GitHub rate-limits a repo, every scan tick re-hits the SAME failing call
@@ -569,11 +586,17 @@ export async function cloneRepo(repo: string, dest: string, onProgress?: (percen
   } catch {
     /* non-fatal */
   }
-  // Save GitHub Actions minutes: our tester runs the same checks in-container, so the CI on
-  // agency branch commits is redundant. A commit-msg hook appends [skip ci] to every commit
-  // the agents make (push + PR runs are skipped); the squash-merge to main still runs CI via
-  // the PR title. Opt out with SKIP_CI=false.
-  if (sBool("skip_ci", "SKIP_CI", true)) {
+  // Save GitHub Actions minutes on watched product repos: our tester runs the same checks
+  // in-container, so CI on agency branch commits is redundant. A commit-msg hook appends [skip ci]
+  // to every commit the agents make (push + PR runs are skipped); the squash-merge to main still
+  // runs CI via the PR title. Opt out with SKIP_CI=false.
+  //
+  // NEVER tag the agency's OWN repo: it has no GitHub Actions, so the tag skips nothing — and it
+  // would leak from the branch commits into the squash-merge commit on `main`, where Coolify honors
+  // [skip ci]/[ci skip] and would SKIP the webhook auto-deploy. That's exactly why self-merges never
+  // redeployed. Exempting the agency repo lets the existing Coolify GitHub-webhook autodeploy ship
+  // self-merges the same way it ships human merges — no API token needed.
+  if (skipCiEnabledFor(repo)) {
     try {
       const hook = join(dest, ".git", "hooks", "commit-msg");
       const script =
@@ -640,10 +663,6 @@ export async function mergePrForBranch(
   try {
     if (pr.isDraft) await gh(["pr", "ready", String(pr.number), "--repo", repo]).catch(() => {});
     await gh(["pr", "merge", String(pr.number), "--repo", repo, "--squash", "--delete-branch"]);
-    // If this was the agency's own repo, Coolify's git-webhook auto-deploy is suppressed by the
-    // `[skip ci]` tag SKIP_CI leaks into the squash commit — fire the deploy API directly so a
-    // self-merge actually ships. No-op unless Coolify is configured + auto-redeploy is on.
-    maybeRedeployAfterMerge(repo);
     return { ok: true, msg: pr.url, files };
   } catch (err) {
     return { ok: false, msg: (err as Error).message };

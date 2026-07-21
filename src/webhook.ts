@@ -38,7 +38,6 @@ import { activeClaims } from "./locks.js";
 import { authEnabled, userFromReq, setSessionCookie, clearSessionCookie, parseCookies, SESSION_COOKIE, verifyRecoveryKey } from "./auth.js";
 import { OPS_SETTINGS, opsSettingsValues, sBool } from "./settings.js";
 import { getSecretSetting, setSecretSetting, getUserSecretStatus } from "./store.js";
-import { coolifyStatus, saveCoolifySettings, triggerCoolifyDeploy } from "./coolify.js";
 import { masterKeyConfigured } from "./crypto.js";
 import { ghBotToken, ghUserToken, claudeToken, anthropicApiKey } from "./creds.js";
 import { providerAuth } from "./agents/provider-auth.js";
@@ -632,7 +631,6 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
                 lastIssueAt: getSetting("analyzer_last_issue_ts") || null,
                 url: getSetting("analyzer_url") || null,
               },
-              deploy: sessionUser && sessionUser.role === "admin" ? coolifyStatus() : null,
             }),
           );
         })();
@@ -1037,7 +1035,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
-        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; coolify?: { baseUrl?: string; uuid?: string; token?: string; autoRedeploy?: "on" | "off" }; force?: boolean } = {};
+        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean } = {};
         try {
           p = JSON.parse(body.toString("utf8"));
         } catch {
@@ -1223,11 +1221,6 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // Analyzer base URL — lets the dashboard's "Run now" button reach the standalone watchdog.
           if (p.analyzerUrl !== undefined && actor.role === "admin") {
             setSetting("analyzer_url", p.analyzerUrl.trim().replace(/\/+$/, ""));
-          }
-          // Coolify deploy config (admin, token write-only) — powers auto-redeploy on self-merge
-          // and the manual "Redeploy now" button.
-          if (p.coolify && typeof p.coolify === "object" && actor.role === "admin") {
-            saveCoolifySettings(p.coolify);
           }
           return ok();
         }
@@ -1747,13 +1740,6 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           } catch (e) {
             return res.writeHead(502).end(JSON.stringify({ error: `Could not reach analyzer: ${(e as Error).message}` }));
           }
-        }
-        if (path === "/redeploy") {
-          // Manually force a Coolify redeploy of THIS agency deployment. Admin-only.
-          if (actor.role !== "admin") return res.writeHead(403).end('{"error":"admin only"}');
-          const r = await triggerCoolifyDeploy(Boolean(p.force), "manual");
-          if (r.ok) return ok(JSON.stringify({ ok: true, message: r.message, deploymentUuid: r.deploymentUuid || null }));
-          return res.writeHead(502).end(JSON.stringify({ error: r.message }));
         }
         if (path === "/add-repo") {
           // Add a repo to the watch list + invite the bot + register the webhook — live, no redeploy.

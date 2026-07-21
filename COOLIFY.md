@@ -10,10 +10,6 @@ Dev Agency runs as one container. You set **no environment variables** — every
 6. **Onboarding.** Pick your model and paste your token — a Claude subscription token from `claude setup-token`, or an `sk-ant-…` API key — then click **Save & test**.
 7. **Add a repo** and open an issue pinning **`@dev`**. The agency plans → builds → reviews → opens a PR.
 
-**Updating:** push to `main` and redeploy (or enable Coolify auto-deploy).
+**Updating:** push to `main` and redeploy (or enable Coolify's GitHub auto-deploy — recommended).
 
-**In-app redeploy trigger.** When the agency merges its *own* self-improvement PR, Coolify's git-webhook auto-deploy is **suppressed** — agency commits carry a `[skip ci]` tag (SKIP_CI, on by default) that leaks into the squash-merge commit, and Coolify skips any deploy whose commit message contains `[skip ci]`/`[ci skip]`. So a self-merge would otherwise never ship. To fix this the agency can call Coolify's **deploy API** directly, bypassing the commit-message gate:
-
-1. In Coolify, create an **API token** with the `deploy` permission, and copy this deployment's **resource UUID**.
-2. In the dashboard: **Settings → General → Deploy (Coolify)** — paste the base URL, resource UUID and token.
-3. Leave **Auto-redeploy after the agency merges its own PR** on, and/or use **Redeploy now** to force a deploy on demand.
+**Self-merges auto-deploy too.** Coolify's GitHub-webhook auto-deploy skips any push whose commit message contains `[skip ci]`/`[ci skip]`. The agency tags its commits with `[skip ci]` (SKIP_CI, on by default) to save GitHub Actions minutes on watched product repos — but it **never** tags its own repo, because that tag would leak into the squash-merge commit on `main` and make Coolify skip the deploy. So once GitHub auto-deploy is enabled, the agency's own self-improvement merges redeploy exactly like your manual merges — no API token, no extra config.

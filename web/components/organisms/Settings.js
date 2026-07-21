@@ -96,47 +96,8 @@ function GeneralSection({ data, reload, admin }) {
       <label style="margin-top:10px">Analyzer issues → repo</label>
       <div class="muted" style="font-size:12px;margin-bottom:4px">Where its advisory issues get created. Blank = this agency's own repo (its default target — these are reports on ITS operational health, not any one watched product repo).</div>
       <input placeholder="owner/repo (blank = agency's own repo)" value=${analyzerRepo} onInput=${(e) => { setAnalyzerRepo(e.target.value); later(() => put({ ops: { analyzer_repo: e.target.value.trim() } })); }}/>
-      <div class="muted" style="font-size:12px;margin-top:6px">Model: the Analyzer role uses your global/Claude default until you configure per-role models — same as every other agent here.</div>
-
-      <${DeploySection} deploy=${data.deploy} reload=${reload}/>` : null}
+      <div class="muted" style="font-size:12px;margin-top:6px">Model: the Analyzer role uses your global/Claude default until you configure per-role models — same as every other agent here.</div>` : null}
   </div>`;
-}
-
-// ---------- Deploy (Coolify redeploy trigger) ----------
-function DeploySection({ deploy, reload }) {
-  const d = deploy || {};
-  const later = useAutoSave();
-  const [baseUrl, setBaseUrl] = useState(d.baseUrl || "");
-  const [uuid, setUuid] = useState("");
-  const [token, setToken] = useState("");
-  const [auto, setAutoRedeploy] = useState(d.autoRedeploy !== false);
-  const [busy, setBusy] = useState(false);
-  const put = (coolify) => api("/settings", { coolify }).then(saved).then(reload).catch(failed);
-  function redeploy(force) {
-    setBusy(true);
-    api("/redeploy", { force: !!force })
-      .then((r) => { toast(r.message || "Redeploy queued"); reload(); })
-      .catch((e) => toast((e && e.message) || "Redeploy failed", "error"))
-      .finally(() => setBusy(false));
-  }
-  const last = d.lastAt
-    ? html`<div class="muted" style="font-size:12px;margin-top:6px">Last: ${d.lastOk ? "✓" : "✗"} ${d.lastMessage || ""} <span style="opacity:.6">(${new Date(d.lastAt).toLocaleString()})</span></div>`
-    : null;
-  return html`<div class="sec" style="margin-top:18px">Deploy (Coolify)</div>
-    <div class="muted" style="font-size:12px;margin-bottom:6px">Force a redeploy of this agency on Coolify. Self-merges don't auto-deploy on their own — the <code>[skip ci]</code> tag on agency commits makes Coolify skip the git-webhook build — so the agency triggers Coolify's deploy API directly after merging its own PR. Needs a Coolify API token with the <code>deploy</code> permission and this deployment's resource UUID.</div>
-    <label>Coolify base URL</label>
-    <input placeholder="https://coolify.example.com" value=${baseUrl} onInput=${(e) => { setBaseUrl(e.target.value); later(() => put({ baseUrl: e.target.value })); }}/>
-    <label style="margin-top:10px">Resource UUID ${d.uuidSet ? html`<span class="muted" style="font-size:11px">(set — leave blank to keep)</span>` : ""}</label>
-    <input placeholder=${d.uuidSet ? "•••••• (unchanged)" : "e.g. u8w4o0k…"} value=${uuid} onInput=${(e) => { setUuid(e.target.value); later(() => e.target.value.trim() && put({ uuid: e.target.value })); }}/>
-    <label style="margin-top:10px">API token ${d.tokenSet ? html`<span class="muted" style="font-size:11px">(set — leave blank to keep)</span>` : ""}</label>
-    <input type="password" autocomplete="new-password" placeholder=${d.tokenSet ? "•••••• (unchanged)" : "coolify API token (deploy scope)"} value=${token} onInput=${(e) => { setToken(e.target.value); later(() => e.target.value.trim() && put({ token: e.target.value })); }}/>
-    <label class="ckline" style="margin-top:12px"><input type="checkbox" checked=${auto} onChange=${(e) => { setAutoRedeploy(e.target.checked); put({ autoRedeploy: e.target.checked ? "on" : "off" }); }}/> Auto-redeploy after the agency merges its own PR</label>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
-      <button class="btn" disabled=${busy || !d.configured} onClick=${() => redeploy(false)}>${busy ? html`<${Spinner} size=${13}/> Deploying…` : "Redeploy now"}</button>
-      <button class="btn ghost" disabled=${busy || !d.configured} onClick=${() => redeploy(true)} data-tip="Rebuild without the Docker layer cache">Redeploy (no cache)</button>
-      ${!d.configured ? html`<span class="muted" style="font-size:12px">Fill in all three fields to enable.</span>` : ""}
-    </div>
-    ${last}`;
 }
 
 // ---------- Models & providers ----------
