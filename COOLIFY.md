@@ -11,3 +11,9 @@ Dev Agency runs as one container. You set **no environment variables** — every
 7. **Add a repo** and open an issue pinning **`@dev`**. The agency plans → builds → reviews → opens a PR.
 
 **Updating:** push to `main` and redeploy (or enable Coolify auto-deploy).
+
+**In-app redeploy trigger.** When the agency merges its *own* self-improvement PR, Coolify's git-webhook auto-deploy is **suppressed** — agency commits carry a `[skip ci]` tag (SKIP_CI, on by default) that leaks into the squash-merge commit, and Coolify skips any deploy whose commit message contains `[skip ci]`/`[ci skip]`. So a self-merge would otherwise never ship. To fix this the agency can call Coolify's **deploy API** directly, bypassing the commit-message gate:
+
+1. In Coolify, create an **API token** with the `deploy` permission, and copy this deployment's **resource UUID**.
+2. In the dashboard: **Settings → General → Deploy (Coolify)** — paste the base URL, resource UUID and token.
+3. Leave **Auto-redeploy after the agency merges its own PR** on, and/or use **Redeploy now** to force a deploy on demand.

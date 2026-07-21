@@ -10,6 +10,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sBool } from "./settings.js";
+import { maybeRedeployAfterMerge } from "./coolify.js";
 import { ghBotToken, ghUserToken } from "./creds.js";
 import { recordOutgoingComment, setCommentGhId, getConversation, recordIncident, getSetting } from "./store.js";
 
@@ -639,6 +640,10 @@ export async function mergePrForBranch(
   try {
     if (pr.isDraft) await gh(["pr", "ready", String(pr.number), "--repo", repo]).catch(() => {});
     await gh(["pr", "merge", String(pr.number), "--repo", repo, "--squash", "--delete-branch"]);
+    // If this was the agency's own repo, Coolify's git-webhook auto-deploy is suppressed by the
+    // `[skip ci]` tag SKIP_CI leaks into the squash commit — fire the deploy API directly so a
+    // self-merge actually ships. No-op unless Coolify is configured + auto-redeploy is on.
+    maybeRedeployAfterMerge(repo);
     return { ok: true, msg: pr.url, files };
   } catch (err) {
     return { ok: false, msg: (err as Error).message };
