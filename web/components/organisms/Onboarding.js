@@ -178,7 +178,7 @@ export function AddRepo({ repos, onClose, reload }) {
     if (!full || busy) return;
     if (!/^[\w.-]+\/[\w.-]+$/.test(full)) { toast("Use owner/name, e.g. acme/app"); return; }
     setBusy(true);
-    api("/add-repo", { repo: full }).then(() => { toast("Added " + full); setManual(""); reload(); }).catch(() => toast("Couldn’t add — use owner/name")).then(() => setBusy(false));
+    api("/add-repo", { repo: full }).then(() => { toast("Added " + full); setManual(""); reload(); }).catch((e) => toast((e && e.message) || "Couldn’t add — use owner/name")).then(() => setBusy(false));
   }
   function remove(full) { if (busy) return; setBusy(true); api("/remove-repo", { repo: full }).then(() => { toast("Removed " + full); reload(); }).catch(() => toast("Couldn’t remove")).then(() => setBusy(false)); }
   const q = filter.trim().toLowerCase();

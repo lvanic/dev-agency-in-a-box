@@ -547,7 +547,15 @@ export async function cloneRepo(repo: string, dest: string, onProgress?: (percen
     p.on("error", reject);
     p.on("exit", (code) => {
       if (code === 0) { if (onProgress) onProgress(100, "cloned"); resolve(); }
-      else reject(new Error(`git clone exited ${code}: ${stderr.trim().slice(-300)}`));
+      else {
+        const tail = stderr.trim().slice(-300);
+        // GitHub returns 404/"Repository not found" for a repo that doesn't exist OR a private repo
+        // the token can't see. Surface that distinctly so the run failure points at access, not git.
+        const msg = /not found|404|401|403/i.test(tail)
+          ? `couldn't clone ${repo} — the agency's GitHub token has no access (is the repo private? invite the bot as a collaborator) or the repo doesn't exist`
+          : `git clone exited ${code}: ${tail}`;
+        reject(new Error(msg));
+      }
     });
   });
   // Safety net for the deterministic `git add -A` finalize: never sweep generated dirs even if

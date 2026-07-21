@@ -17,7 +17,7 @@ export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoFi
     if (!full || busy) return;
     if (!/^[\w.-]+\/[\w.-]+$/.test(full)) { toast("Use owner/name, e.g. acme/app"); return; }
     setBusy(true);
-    api("/add-repo", { repo: full }).then(() => { toast("Added " + full); setManual(""); if (setRepoFilter) setRepoFilter(full); reload(); }).catch(() => toast("Couldn’t add — use owner/name")).then(() => setBusy(false));
+    api("/add-repo", { repo: full }).then(() => { toast("Added " + full); setManual(""); if (setRepoFilter) setRepoFilter(full); reload(); }).catch((e) => toast((e && e.message) || "Couldn’t add — use owner/name")).then(() => setBusy(false));
   }
   function remove(full) {
     if (busy) return; setBusy(true);

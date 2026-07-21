@@ -56,7 +56,7 @@ import { listRateLimited } from "./store.js";
 import { getConversation, conversationCount, foldInGitHubComment, recordOutgoingComment, setCommentGhId, updateCommentBody } from "./store.js";
 import { recentFailuresSince } from "./store.js";
 import { effectiveRepos } from "./commands.js";
-import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments } from "./github.js";
+import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists } from "./github.js";
 import { listAgentFiles, readAgentFile, isSafeAgentPath } from "./memory.js";
 import { startApp, stopApp, getApp, pickWebDevScript, isTauriPackage, buildLocalCommand } from "./apprun.js";
 import { ensureRepoAccess } from "./commands.js";
@@ -1746,14 +1746,23 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // Require a full owner/name so malformed entries (just an owner) can't be added.
           const full = repo.trim();
           if (!/^[\w.-]+\/[\w.-]+$/.test(full)) return res.writeHead(400).end(JSON.stringify({ error: "Use owner/name, e.g. acme/app" }));
-          addWatchedRepo(full);
-          ensureRepoIndex(full); // warm the code-graph cache now, so the first run isn't slowed by it
+          // Invite the bot / register the webhook FIRST (idempotent), then verify the agency's token
+          // can actually reach the repo — using the SAME token `cloneRepo` will use. Without this a
+          // typo or a private repo the bot wasn't invited to was silently added and only blew up later
+          // with a cryptic "git clone: Repository not found" on Start (#181).
           let note = "";
           try {
             note = await ensureRepoAccess(cfg, full);
           } catch {
             /* best effort */
           }
+          if (!(await repoExists(full, ghBotToken()))) {
+            return res.writeHead(400).end(JSON.stringify({
+              error: `Can't access ${full}. Check the spelling, or — if it's private — invite the bot as a collaborator (repo Settings → Collaborators) or set ADMIN_GITHUB_TOKEN so the agency can invite itself.`,
+            }));
+          }
+          addWatchedRepo(full);
+          ensureRepoIndex(full); // warm the code-graph cache now, so the first run isn't slowed by it
           void trigger("dashboard-add-repo");
           return ok(JSON.stringify({ ok: true, note }));
         }
