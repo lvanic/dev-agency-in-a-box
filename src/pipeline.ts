@@ -30,6 +30,15 @@ import { runRole } from "./agents/roleAgent.js";
 import { ROLES, roleTier } from "./agents/roles.js";
 import type { Tier } from "./db/providers.js";
 import { isStopRequested, isHoldRequested } from "./abort.js";
+import {
+  buildHandoff,
+  renderHandoffLine,
+  extractHandoffLine,
+  REVIEWER_HANDOFF_INSTRUCTION,
+  PLANNER_HANDOFF_INSTRUCTION,
+  type HandoffPhase,
+  type Handoff,
+} from "./handoff.js";
 // True if the user has stopped this issue — every phase checks this before doing ANY work so Stop
 // means "no next agent, no next step, no commit/PR". (runRole has its own guard for the agent run.)
 function stopped(repo: string, number: number, where: string): boolean {
@@ -48,7 +57,7 @@ function held(repo: string, number: number, where: string): boolean {
   return false;
 }
 import type { RoleName } from "./agents/roles.js";
-import { recordRun, recordPlan, lastPlan, recordIssueStatus, getIssueStatus, recordIssueFiles, recordPr, setByAgent, addEpicChild, listEpicChildren, getSession, issueActivity, recordReview, getReview, recordConflict, clearConflict, getSetting, setSetting, skillsPrompt, listHooks, listAgentDefs, changesTouchingFiles, getWorkflowByTrigger, setIssueWorkflow, appendRunMsg, renderBadge, upsertIssueDigest, refreshIssueDigest, type Workflow } from "./store.js";
+import { recordRun, recordPlan, lastPlan, recordIssueStatus, getIssueStatus, recordIssueFiles, recordPr, setByAgent, addEpicChild, listEpicChildren, getSession, issueActivity, recordReview, getReview, recordConflict, clearConflict, getSetting, setSetting, skillsPrompt, listHooks, listAgentDefs, changesTouchingFiles, getWorkflowByTrigger, setIssueWorkflow, appendRunMsg, renderBadge, upsertIssueDigest, refreshIssueDigest, getIssueDigest, type Workflow } from "./store.js";
 import { conflictFiles } from "./github.js";
 import { pushActivity, pushRunMsg, setActive, getActive } from "./activity.js";
 import { execSync } from "node:child_process";
@@ -153,9 +162,27 @@ function issueHeader(issue: Issue): string {
   return `Issue #${issue.number}: ${issue.title}\n\n${issue.body || "(no description)"}`;
 }
 
+/** Legacy fallback: the reviewer's verdict from a bare "APPROVE"/"REQUEST CHANGES" first line. Used
+ *  only when the reply doesn't carry a valid structured `HANDOFF` first line — see parseReviewVerdict. */
 function changesRequested(reviewText: string): boolean {
   const firstLine = reviewText.split("\n").find((l) => l.trim().length > 0) ?? "";
   return /request\s+changes/i.test(firstLine);
+}
+
+/**
+ * P2 (prime-time-plan): the reviewer's verdict + the human-facing prose. Prefers the structured
+ * `HANDOFF {"verdict":"a"|"c"}` first line (strictly validated by decodeHandoff — see handoff.ts),
+ * falling back to the legacy "APPROVE"/"REQUEST CHANGES" first-line regex when it's missing or
+ * malformed (models sometimes drift — never hard-fail a run on a parse miss; see `structured`).
+ * `rest` is the reply with the machine line stripped — what the GitHub mirror and the trivial-ask
+ * heuristic should read, never the raw `HANDOFF {...}` JSON.
+ */
+export function parseReviewVerdict(text: string): { verdict: "approved" | "changes"; structured: boolean; rest: string } {
+  const { handoff, rest } = extractHandoffLine(text);
+  if (handoff && handoff.verdict) return { verdict: handoff.verdict === "a" ? "approved" : "changes", structured: true, rest };
+  // `rest` (not the raw `text`): a malformed HANDOFF-tagged line is already stripped by
+  // extractHandoffLine, so the legacy APPROVE/REQUEST CHANGES fallback still sees a clean first line.
+  return { verdict: changesRequested(rest) ? "changes" : "approved", structured: false, rest };
 }
 
 /** P3 (prime-time-plan): a purely mechanical review ask (lint/format/nit-level, no logic change) —
@@ -235,24 +262,90 @@ async function sayAs(repo: string, number: number, name: string, body: string): 
   await commentOnIssue(repo, number, formatted);
 }
 
-export type PlannerDecision = { kind: "questions" | "plan"; body: string; auto: boolean };
+/**
+ * P2 (prime-time-plan): a DB-only (never mirrored to GitHub) warning line for the run thread — used
+ * whenever a role's reply is missing its structured `HANDOFF` first line and we fell back to the
+ * legacy regex/keyword parser (models sometimes drift from the format). Never fails the run; just
+ * makes the drift visible on the dashboard instead of silently degrading to the fuzzier parse.
+ */
+function warnFallbackParse(repo: string, number: number, role: RoleName, why: string): void {
+  const runId = currentRunId(repo, number);
+  const id = appendRunMsg(repo, number, runId, role, "warn", why);
+  pushRunMsg(id, repo, number, runId, role, `${renderBadge(role)}\n\n⚠️ ${why}`);
+}
 
-/** Parse the planner's reply: first word signals intent (QUESTIONS / PLAN [AUTO]). */
-export function parsePlannerDecision(text: string): PlannerDecision {
+/**
+ * The human's newest note(s): the trailing `[human] …` block(s) after the agency's last reply in a
+ * `commentThread()`-shaped string (same `\n\n---\n\n` separator `isApproval()` splits on). This IS
+ * the new instruction for a pr-fix/follow-up run — not history (`recall()` covers anything earlier)
+ * — so it's still handed to the agent; the rest of the (already-capped) thread is not.
+ */
+export function latestHumanNote(thread: string): string {
+  const sep = "\n\n---\n\n";
+  const blocks = (thread || "").split(sep);
+  let i = blocks.length;
+  while (i > 0 && blocks[i - 1].trimStart().startsWith("[human]")) i--;
+  return blocks.slice(i).join(sep).trim();
+}
+
+/**
+ * The compact machine payload every role prompt gets INSTEAD of the re-fed thread (P2, prime-time-
+ * plan, finishing docs/orchestrator-v2-plan.md's "push a tiny handoff; pull detail on demand"): the
+ * current Handoff envelope + the issue's digest + a pointer to `recall()` for anything older. NEVER
+ * the concatenated GitHub/run thread — that's the whole point of this change.
+ */
+export function handoffBlock(repo: string, number: number, phase: HandoffPhase, extra?: Partial<Omit<Handoff, "v" | "phase">>): string {
+  const h = buildHandoff(repo, number, phase, extra);
+  const digest = getIssueDigest(repo, number);
+  return [
+    `\n\n### Handoff\n${renderHandoffLine(h)}`,
+    digest ? `\n\n### Digest\n${digest}` : "",
+    `\n\n(Older detail — prior plans/reviews/lessons — isn't included above; call the recall tool if you need it.)`,
+  ].join("");
+}
+
+export type PlannerDecision = { kind: "questions" | "plan"; body: string; auto: boolean; structured: boolean };
+
+/** Legacy fallback: first-word keyword sniff (QUESTIONS / PLAN [AUTO]). Used only when the planner's
+ *  reply doesn't carry a valid structured `HANDOFF` first line (models sometimes drift) — never a
+ *  hard failure, just a less precise signal. Kept exactly as it behaved before P2. */
+function parsePlannerDecisionFallback(text: string): PlannerDecision {
   const trimmed = text.trim();
   const m = /^\s*(QUESTIONS|PLAN)(\s+AUTO)?\b[:\-\s]*/i.exec(trimmed);
   if (m) {
     const kind = m[1].toLowerCase() === "questions" ? "questions" : "plan";
-    return { kind, auto: Boolean(m[2]), body: trimmed.slice(m[0].length).trim() };
+    return { kind, auto: Boolean(m[2]), body: trimmed.slice(m[0].length).trim(), structured: false };
   }
-  return { kind: "plan", auto: false, body: trimmed };
+  return { kind: "plan", auto: false, body: trimmed, structured: false };
+}
+
+/**
+ * Parse the planner's reply: prefer a structured `HANDOFF {...}` first line (strictly validated by
+ * decodeHandoff()) — `phase:"plan"` + a `q` means questions, `phase:"dev"` means build immediately
+ * (the old "PLAN AUTO"), `phase:"plan"` with no `q` means propose-for-approval (the old "PLAN"). Falls
+ * back to the legacy QUESTIONS/PLAN keyword sniff when the structured line is missing or malformed —
+ * never hard-fails a run on a parse miss (see `structured` on the result; callers log a warning).
+ */
+export function parsePlannerDecision(text: string): PlannerDecision {
+  const { handoff, rest } = extractHandoffLine(text);
+  if (handoff && handoff.phase === "plan" && handoff.q) return { kind: "questions", body: rest || handoff.q, auto: false, structured: true };
+  if (handoff && handoff.phase === "dev") return { kind: "plan", body: rest, auto: true, structured: true };
+  if (handoff && handoff.phase === "plan") return { kind: "plan", body: rest, auto: false, structured: true };
+  // `rest` (not the raw `text`): extractHandoffLine already strips a HANDOFF-TAGGED line even when its
+  // JSON fails to decode, so a malformed envelope never blocks the fallback from finding a legit
+  // QUESTIONS/PLAN AUTO/PLAN keyword on the next line.
+  return parsePlannerDecisionFallback(rest);
 }
 
 /** Run the Planner once. Returns the decision and the model used (for the ledger). */
 async function plan(repo: string, issue: Issue, workdir: string, thread: string): Promise<PlannerDecision> {
-  if (stopped(repo, issue.number, "plan")) return { kind: "questions", body: "", auto: false };
-  if (held(repo, issue.number, "plan")) return { kind: "questions", body: "", auto: false };
+  if (stopped(repo, issue.number, "plan")) return { kind: "questions", body: "", auto: false, structured: false };
+  if (held(repo, issue.number, "plan")) return { kind: "questions", body: "", auto: false, structured: false };
   const prior = lastPlan(repo, issue.number);
+  // P2 (prime-time-plan): the only piece of "thread" that's still real content here is the human's
+  // answer to a prior QUESTIONS round — planner.md's "if they already answered, don't re-ask" only
+  // works if that answer actually reaches the prompt. Everything else comes from the Handoff + digest.
+  const answer = latestHumanNote(thread);
   const res = await runRole("planner", {
     workdir,
     repo,
@@ -263,11 +356,12 @@ async function plan(repo: string, issue: Issue, workdir: string, thread: string)
       `Plan the work for this issue. Inspect the repository and project memory first.`,
       ``,
       issueHeader(issue),
-      thread ? `\n### Conversation so far\n${thread}` : "",
       prior ? `\n### Your earlier plan (for reference)\n${prior}` : "",
+      answer ? `\n### Latest human note (e.g. an answer to your prior questions)\n${answer}` : "",
+      handoffBlock(repo, issue.number, "plan"),
       ``,
-      `Reply starting with "QUESTIONS" (if you need clarification) or "PLAN" (if ready).`,
-      `When you PLAN, declare the file footprint on its own line: \`FILES: path/one.ts, path/two.ts\` —`,
+      PLANNER_HANDOFF_INSTRUCTION,
+      `When your plan is ready, also declare the file footprint on its own line: \`FILES: path/one.ts, path/two.ts\` —`,
       `the exact files this work will create or modify. If you break it into SUB-ISSUES, append a`,
       `\`{files: ...}\` annotation to EACH sub-issue line with the files THAT sub-issue touches. The agency`,
       `uses this to run non-overlapping work in parallel and never let two agents edit the same file at once.`,
@@ -275,6 +369,7 @@ async function plan(repo: string, issue: Issue, workdir: string, thread: string)
   });
   recordRun(repo, issue.number, "planner", res.model, res.turns, "plan", res.costUsd);
   const decision = parsePlannerDecision(res.text);
+  if (!decision.structured) warnFallbackParse(repo, issue.number, "planner", "planner reply missing a valid structured HANDOFF line — fell back to the QUESTIONS/PLAN keyword parse.");
   if (decision.kind === "plan") {
     const files = parseFileList(decision.body);
     if (files.length) recordIssueFiles(repo, issue.number, files); // footprint → file-lock scheduling
@@ -495,15 +590,21 @@ async function build(
     `IMPORTANT: commit and push after EACH logical chunk (\`git add <files> && git commit -m "…" && git push\`), ` +
     `not just at the end. A quick sanity check is fine, but do NOT repeatedly re-run the full test suite — the ` +
     `Tester does that next, and the orchestrator opens/updates the PR. When the change is made and committed, stop.`;
+  // P2 (prime-time-plan): the only piece of "thread" that's still real TASK content (not history) is
+  // the human's newest note — e.g. a follow-up comment on already-delivered work. Everything else the
+  // developer needs comes from the Handoff + digest below, never the concatenated thread.
+  const followUpNote = latestHumanNote(thread);
   const devTask = resume
     ? `RESUMING an interrupted run. First \`git fetch origin ${branch}\` and check it out if it exists; review ` +
       `what's already committed (\`git log --oneline main..HEAD\`, \`git diff\`). Finish ONLY what's incomplete ` +
       `per the plan — do NOT redo committed work. ${finishRule}\n\n` +
-      `### Plan\n${planText}\n\n### What the interrupted run already did\n${resume.digest}\n\n### ${issueHeader(issue)}`
+      `### Plan\n${planText}\n\n### What the interrupted run already did\n${resume.digest}\n\n### ${issueHeader(issue)}` +
+      handoffBlock(repo, issue.number, "dev", { br: branch })
     : `Implement this issue on branch \`${branch}\` off an up-to-date main, following the plan and the harness. ` +
       `Reuse existing code; keep the change small; add/extend tests. ${finishRule}\n\n` +
       `### Approved plan\n${planText}\n\n### ${issueHeader(issue)}` +
-      (thread ? `\n\n### Conversation (latest changes apply)\n${thread}` : "");
+      (followUpNote ? `\n\n### Latest human note (apply this)\n${followUpNote}` : "") +
+      handoffBlock(repo, issue.number, "dev", { br: branch });
 
   const dev = await runRole("developer", {
     workdir,
@@ -528,6 +629,11 @@ async function build(
   // Orchestrated loop (decideNext is the single source of "what next"): keep tests green BEFORE
   // reviewing broken code, re-test after every revise, and warm the reviewer across its own rounds.
   let testText = test.text, testPass = test.pass, testVerified = test.verified, lastReview = "", round = 0, reviews = 0;
+  // lastVerdict (P2): the SOURCE OF TRUTH for "does this still need changes" — set explicitly at
+  // every place lastReview is set, rather than re-derived from lastReview's TEXT at the end. Once the
+  // reviewer's human-facing text is the Handoff-stripped `rest` (not a raw "REQUEST CHANGES" first
+  // line), re-running changesRequested() on it would be unreliable — the wording is no longer guaranteed.
+  let lastVerdict: "approved" | "changes" = "approved";
   const maxR = maxReviseRounds();
   // `hintTier` (P3): a tier keyword from applyModelHint() — passed as runRole's `model`, which only
   // ever wins when no explicit per-issue/per-agent override exists (roleAgent's resolution checks
@@ -558,11 +664,11 @@ async function build(
       // after a PRIOR revise round already ran and failed to prevent it (whichever axis triggered
       // that round) — so round >= 1 here always means the previous round also failed.
       const d = decideNext({ phase: "tested", devChanged: true, testPass: false, round, maxRounds: maxR, prevRoundFailed: round >= 1 });
-      if (d.action !== "revise") { lastReview = "REQUEST CHANGES — tests still failing (out of revise rounds)."; break; }
+      if (d.action !== "revise") { lastReview = "Tests still failing (out of revise rounds)."; lastVerdict = "changes"; break; }
       round++;
       const hintTier = applyModelHint(repo, issue.number, d.modelHint);
-      const changed = await reviseDev(`Tests are FAILING on branch \`${branch}\`. Fix only what's needed to make them pass, commit and push. Keep the diff focused.\n\n### Failing checks\n${testText}`, hintTier);
-      if (!changed) { lastReview = "REQUEST CHANGES — tests failing and the developer produced no change."; break; }
+      const changed = await reviseDev(`Tests are FAILING on branch \`${branch}\`. Fix only what's needed to make them pass, commit and push. Keep the diff focused.\n\n### Failing checks\n${testText}` + handoffBlock(repo, issue.number, "revise", { br: branch, round, test: "f" }), hintTier);
+      if (!changed) { lastReview = "Tests failing and the developer produced no change."; lastVerdict = "changes"; break; }
       await retest("Re-test after fix");
       continue;
     }
@@ -572,40 +678,42 @@ async function build(
       task:
         reviews === 0
           ? `Review the changes on branch \`${branch}\` for issue #${issue.number} against the harness. ` +
-            `Inspect the diff vs main (e.g. \`git diff main...HEAD\`). Start your reply with exactly ` +
-            `"APPROVE" or "REQUEST CHANGES" on the first line, then notes.\n\nTest results were:\n${testText}`
+            `Inspect the diff vs main (e.g. \`git diff main...HEAD\`). ${REVIEWER_HANDOFF_INSTRUCTION}\n\nTest results were:\n${testText}` +
+            handoffBlock(repo, issue.number, "review", { br: branch, round, test: "p" })
           : `The developer addressed your previous requested changes on branch \`${branch}\`. Re-check ONLY ` +
-            `whether each point you raised is now resolved (inspect \`git diff main...HEAD\`). Start with exactly ` +
-            `"APPROVE" or "REQUEST CHANGES" on the first line.\n\nLatest tests:\n${testText}`,
+            `whether each point you raised is now resolved (inspect \`git diff main...HEAD\`). ${REVIEWER_HANDOFF_INSTRUCTION}\n\nLatest tests:\n${testText}` +
+            handoffBlock(repo, issue.number, "review", { br: branch, round, test: "p" }),
       ...(reviews > 0 ? { resumeSessionId: getSession(repo, issue.number, "reviewer") ?? undefined } : {}),
     });
     recordRun(repo, issue.number, "reviewer", review.model, review.turns, "review", review.costUsd);
-    lastReview = review.text; reviews++;
-    await say(repo, issue.number, "reviewer", `**Review (round ${reviews})**\n\n${review.text}`);
+    reviews++;
+    const rv = parseReviewVerdict(review.text);
+    if (!rv.structured) warnFallbackParse(repo, issue.number, "reviewer", "reviewer reply missing a valid structured HANDOFF line — fell back to the APPROVE/REQUEST CHANGES keyword parse.");
+    lastReview = rv.rest; lastVerdict = rv.verdict;
+    await say(repo, issue.number, "reviewer", `**Review (round ${reviews})**\n\n${rv.rest}`);
 
-    const verdict: "approved" | "changes" = changesRequested(review.text) ? "changes" : "approved";
     // filesChanged/trivialFeedback (P3): conservative downshift signals — how big is the diff being
     // reviewed, and did this review's ask read as purely mechanical. Best-effort; a git error just
     // leaves filesChanged undefined (never downshifts on missing data).
     const filesChanged = await changedFileCount(workdir, await repoBaseBranch(repo));
-    const trivialFeedback = verdict === "changes" ? looksTrivialReviewAsk(review.text) : undefined;
+    const trivialFeedback = rv.verdict === "changes" ? looksTrivialReviewAsk(rv.rest) : undefined;
     // prevRoundFailed: same derivation as the test-fail branch above — round >= 1 here always means
     // a prior revise round already ran and still left the reviewer wanting changes (or a test-fix
     // revise that got us here, with review now failing for a repeat overall round).
-    const d = decideNext({ phase: "reviewed", devChanged: true, reviewVerdict: verdict, round, maxRounds: maxR, filesChanged, trivialFeedback, prevRoundFailed: round >= 1 });
+    const d = decideNext({ phase: "reviewed", devChanged: true, reviewVerdict: rv.verdict, round, maxRounds: maxR, filesChanged, trivialFeedback, prevRoundFailed: round >= 1 });
     if (d.action === "finalize") break;
 
     // 3) Changes requested + rounds left → warm dev addresses them, then re-test and loop.
     round++;
     const hintTier = applyModelHint(repo, issue.number, d.modelHint);
-    const changed = await reviseDev(`The reviewer requested changes on branch \`${branch}\`. Address each point, commit and push. Keep the diff focused.\n\n### Review\n${review.text}`, hintTier);
+    const changed = await reviseDev(`The reviewer requested changes on branch \`${branch}\`. Address each point, commit and push. Keep the diff focused.\n\n### Review\n${rv.rest}` + handoffBlock(repo, issue.number, "revise", { br: branch, round, verdict: "c" }), hintTier);
     if (!changed) break; // no-op → stop (don't re-review identical code)
     await retest("Re-test after fixes");
   }
 
   // Record the FINAL verdict so the dashboard knows whether this PR still has requested changes
   // (after the one allowed auto-revise round). If so, the card flags it and offers a Fix button.
-  const stillChanges = changesRequested(lastReview);
+  const stillChanges = lastVerdict === "changes";
   recordReview(repo, issue.number, stillChanges ? "changes" : "approved", lastReview);
   refreshIssueDigest(repo, issue.number); // the round's say("reviewer", …) upserted BEFORE this verdict landed
 
@@ -741,18 +849,32 @@ async function runSpecialist(
   }
 
   const tasks: Record<string, string> = {
-    architect: `Produce a short technical plan for this issue (no code).\n\n${issueHeader(issue)}`,
+    architect: `Produce a short technical plan for this issue (no code).\n\n${issueHeader(issue)}` + handoffBlock(repo, issue.number, "plan"),
     reviewer:
       `Review the latest changes for issue #${issue.number} (branch \`${branch}\` if it exists; otherwise ` +
-      `the proposal). Inspect any diff vs main. Give specific, actionable feedback.\n\n${issueHeader(issue)}`,
+      `the proposal). Inspect any diff vs main. Give specific, actionable feedback. ${REVIEWER_HANDOFF_INSTRUCTION}\n\n${issueHeader(issue)}` +
+      handoffBlock(repo, issue.number, "review", { br: branch }),
     tester:
       `Run the project's checks (typecheck, lint, test, build) and report results. If branch \`${branch}\` ` +
-      `exists, test that; otherwise the default branch.\n\n${issueHeader(issue)}`,
+      `exists, test that; otherwise the default branch.\n\n${issueHeader(issue)}` +
+      handoffBlock(repo, issue.number, "test", { br: branch }),
   };
 
   const out = await runRole(role, { workdir, repo, issueNumber: issue.number, task: tasks[role] });
   recordRun(repo, issue.number, role, out.model, out.turns, "specialist", out.costUsd);
-  await say(repo, issue.number, role, out.text);
+  // reviewer.md tells the Reviewer to ALWAYS lead with a structured HANDOFF verdict line — strip it
+  // before the human-facing post (never leak the raw JSON into the GitHub mirror) and record the
+  // verdict the same way the build/pr-fix/review-fix paths do, so getReview()/the card badge reflect
+  // this specialist run too (previously this branch just posted out.text raw with no verdict record).
+  if (role === "reviewer") {
+    const rv = parseReviewVerdict(out.text);
+    if (!rv.structured) warnFallbackParse(repo, issue.number, "reviewer", "reviewer reply missing a valid structured HANDOFF line — fell back to the APPROVE/REQUEST CHANGES keyword parse.");
+    await say(repo, issue.number, role, rv.rest);
+    recordReview(repo, issue.number, rv.verdict, rv.rest);
+    refreshIssueDigest(repo, issue.number); // the say() above upserted BEFORE this verdict landed
+  } else {
+    await say(repo, issue.number, role, out.text);
+  }
   recordIssueStatus(repo, issue.number, withStatus("review"));
   console.log(`[agency] ${repo} #${issue.number} -> review (${role}).`);
 }
@@ -776,6 +898,9 @@ export async function runPrFix(
     rev && rev.verdict === "changes"
       ? `\n\n### Reviewer's requested changes (you MUST address each one)\n${rev.summary}`
       : "";
+  // P2 (prime-time-plan): the human's latest note IS the task here — pull just that out of the
+  // thread (not the whole capped conversation); everything older comes via the Handoff + recall().
+  const ask = latestHumanNote(thread);
   // Stream activity under the PR number — it must match setActive's key, otherwise the
   // dashboard's live card for this PR stays empty.
   const dev = await runRole("developer", {
@@ -784,12 +909,13 @@ export async function runPrFix(
     issueNumber: pr,
     task:
       `Update the existing pull request. First run \`git fetch origin ${branch} && git checkout ${branch}\`. ` +
-      `Then make the changes the human is asking for in the latest comment (and any reviewer-requested changes ` +
-      `below), commit, and push (this updates PR #${pr}). Keep the diff focused. ` +
+      `Then make the changes the human is asking for below (and any reviewer-requested changes below that), ` +
+      `commit, and push (this updates PR #${pr}). Keep the diff focused. ` +
       `Actually implement the changes and commit — do NOT reply that there is nothing to do unless you have ` +
       `verified in the code that every requested point is already satisfied, and then explain why for each point.` +
       reviewBlock +
-      `\n\n### PR conversation (latest comment is the request)\n${thread}`,
+      (ask ? `\n\n### The human's latest request\n${ask}` : "") +
+      handoffBlock(repo, issueNumber, "revise", { br: branch }),
   });
   recordRun(repo, issueNumber, "developer", dev.model, dev.turns, "pr-fix", dev.costUsd);
 
@@ -802,13 +928,15 @@ export async function runPrFix(
     repo,
     issueNumber: pr,
     task:
-      `Re-review branch \`${branch}\` after the latest changes. Inspect \`git diff main...HEAD\`. ` +
-      `Start your reply with exactly "APPROVE" or "REQUEST CHANGES" on the first line, then notes.\n\nLatest tests:\n${test.text}`,
+      `Re-review branch \`${branch}\` after the latest changes. Inspect \`git diff main...HEAD\`. ${REVIEWER_HANDOFF_INSTRUCTION}\n\nLatest tests:\n${test.text}` +
+      handoffBlock(repo, issueNumber, "review", { br: branch, test: "p" }),
     ...(getSession(repo, pr, "reviewer") ? { resumeSessionId: getSession(repo, pr, "reviewer") ?? undefined } : {}),
   });
   recordRun(repo, issueNumber, "reviewer", review.model, review.turns, "review", review.costUsd);
-  await say(repo, issueNumber, "reviewer", `**Review (after fix)**\n\n${review.text}`);
-  recordReview(repo, issueNumber, changesRequested(review.text) ? "changes" : "approved", review.text);
+  const rv = parseReviewVerdict(review.text);
+  if (!rv.structured) warnFallbackParse(repo, issueNumber, "reviewer", "reviewer reply missing a valid structured HANDOFF line — fell back to the APPROVE/REQUEST CHANGES keyword parse.");
+  await say(repo, issueNumber, "reviewer", `**Review (after fix)**\n\n${rv.rest}`);
+  recordReview(repo, issueNumber, rv.verdict, rv.rest);
   refreshIssueDigest(repo, issueNumber); // the say() above upserted BEFORE this verdict landed
 }
 
@@ -915,7 +1043,8 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
           `side's code to make the markers go away. Remove all \`<<<<<<<\`/\`=======\`/\`>>>>>>>\` markers, then \`git add\` each resolved file. ` +
           `Do NOT run \`git merge\`/\`git rebase\` again, do NOT \`git merge --abort\`, do NOT open a new PR, and do NOT commit — the system commits and pushes for you. ` +
           `When every file is resolved and \`git add\`ed, make sure the project still builds, then stop.` +
-          journalContextForFiles(repo, m.files),
+          journalContextForFiles(repo, m.files) +
+          handoffBlock(repo, issue.number, "revise", { br: branch }),
         ...(getSession(repo, issue.number, "developer") ? { resumeSessionId: getSession(repo, issue.number, "developer") ?? undefined } : {}),
       });
       recordRun(repo, issue.number, "developer", dev.model, dev.turns, "resolve-conflict", dev.costUsd);
@@ -963,7 +1092,8 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
       `Make sure you're on the PR branch: \`git checkout ${branch}\` (it's already checked out). ` +
       `Address the reviewer's requested changes. ` +
       `Make the fixes, add/extend tests as needed, then commit and push to the SAME branch (do NOT open a new PR). ` +
-      `Keep the diff focused on what was asked.\n\n### Reviewer's requested changes\n${review}\n\n### ${issueHeader(issue)}`,
+      `Keep the diff focused on what was asked.\n\n### Reviewer's requested changes\n${review}\n\n### ${issueHeader(issue)}` +
+      handoffBlock(repo, issue.number, "revise", { br: branch }),
     ...(getSession(repo, issue.number, "developer") ? { resumeSessionId: getSession(repo, issue.number, "developer") ?? undefined } : {}),
   });
   recordRun(repo, issue.number, "developer", dev.model, dev.turns, "revise", dev.costUsd);
@@ -986,15 +1116,17 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
     repo,
     issueNumber: issue.number,
     task:
-      `Re-review branch \`${branch}\` for issue #${issue.number} after the fixes. Inspect \`git diff main...HEAD\`. ` +
-      `Start your reply with exactly "APPROVE" or "REQUEST CHANGES" on the first line, then notes.\n\nLatest tests:\n${test.text}`,
+      `Re-review branch \`${branch}\` for issue #${issue.number} after the fixes. Inspect \`git diff main...HEAD\`. ${REVIEWER_HANDOFF_INSTRUCTION}\n\nLatest tests:\n${test.text}` +
+      handoffBlock(repo, issue.number, "review", { br: branch, test: "p" }),
     ...(getSession(repo, issue.number, "reviewer") ? { resumeSessionId: getSession(repo, issue.number, "reviewer") ?? undefined } : {}),
   });
   recordRun(repo, issue.number, "reviewer", review2.model, review2.turns, "review", review2.costUsd);
-  await say(repo, issue.number, "reviewer", `**Review (after fix)**\n\n${review2.text}`);
+  const rv2 = parseReviewVerdict(review2.text);
+  if (!rv2.structured) warnFallbackParse(repo, issue.number, "reviewer", "reviewer reply missing a valid structured HANDOFF line — fell back to the APPROVE/REQUEST CHANGES keyword parse.");
+  await say(repo, issue.number, "reviewer", `**Review (after fix)**\n\n${rv2.rest}`);
 
-  const stillChanges = changesRequested(review2.text);
-  recordReview(repo, issue.number, stillChanges ? "changes" : "approved", review2.text);
+  const stillChanges = rv2.verdict === "changes";
+  recordReview(repo, issue.number, rv2.verdict, rv2.rest);
   refreshIssueDigest(repo, issue.number); // the say() above upserted BEFORE this verdict landed
   await finalizeWithPr(repo, issue, workdir, branch, stillChanges, !test.verified, test.neededToolchain);
 }
@@ -1068,6 +1200,7 @@ export async function runDeveloperSolo(repo: string, issue: Issue, workdir: stri
   if (stopped(repo, issue.number, "runDeveloperSolo")) return;
   if (held(repo, issue.number, "runDeveloperSolo")) return;
   const branch = `agency/issue-${issue.number}`;
+  const followUpNote = latestHumanNote(thread);
   const dev = await runRole("developer", {
     workdir,
     repo,
@@ -1076,7 +1209,8 @@ export async function runDeveloperSolo(repo: string, issue: Issue, workdir: stri
       `Implement this issue on branch \`${branch}\` off an up-to-date main. Reuse existing code, keep the change ` +
       `focused, and commit + push your work (\`git add … && git commit -m "…" && git push\`). When the change is ` +
       `made and committed, stop — the orchestrator opens the PR.\n\n### ${issueHeader(issue)}` +
-      (thread ? `\n\n### Conversation (latest applies)\n${thread}` : ""),
+      (followUpNote ? `\n\n### Latest human note (apply this)\n${followUpNote}` : "") +
+      handoffBlock(repo, issue.number, "dev", { br: branch }),
   });
   if (isStopRequested(repo, issue.number)) return; // user stopped — don't open a PR
   recordRun(repo, issue.number, "developer", dev.model, dev.turns, "implement", dev.costUsd);
@@ -1142,6 +1276,10 @@ ${skillsPrompt(step.skills)}` : "";
     if (stepAuthor) await sayAs(repo, issue.number, stepAuthor, stepHeader);
     else await say(repo, issue.number, role, stepHeader);
     await runStepHooks(hookIds, "pre", workdir, repo, issue.number);
+    // P2: the workflow step gets the Handoff + digest (never the accumulated thread) — only the
+    // human's newest note, when there is one, is real task content worth carrying along.
+    const stepFollowUpNote = latestHumanNote(thread);
+    const stepPhase: HandoffPhase = role === "reviewer" ? "review" : role === "tester" ? "test" : role === "planner" || role === "architect" || role === "decomposer" ? "plan" : "dev";
     let out: Awaited<ReturnType<typeof runRole>>;
     try {
       out = await runRole(role, {
@@ -1149,10 +1287,10 @@ ${skillsPrompt(step.skills)}` : "";
         ...(customDef ? { agentDef: { handle: customDef.handle || `@${customDef.name}`, name: customDef.name, persona: customDef.persona, canWriteCode: customDef.canWriteCode } } : {}),
         task: `${instr}
 
-### ${issueHeader(issue)}${thread ? `
+### ${issueHeader(issue)}${stepFollowUpNote ? `
 
-### Conversation
-${thread}` : ""}${skills}`,
+### Latest human note
+${stepFollowUpNote}` : ""}${handoffBlock(repo, issue.number, stepPhase, { br: branch })}${skills}`,
         ...((step.model || customDef?.model) ? { model: (step.model || customDef?.model) as string } : {}),
       });
     } catch (err) {
@@ -1165,10 +1303,28 @@ ${thread}` : ""}${skills}`,
     }
     if (isStopRequested(repo, issue.number)) { console.log(`[agency] workflow halted mid-step by Stop ${repo} #${issue.number}`); return; }
     recordRun(repo, issue.number, role, out.model, out.turns, "workflow", out.costUsd);
-    if (out.text.trim()) {
-      if (stepAuthor) await sayAs(repo, issue.number, stepAuthor, out.text);
-      else await say(repo, issue.number, role, out.text);
+    // reviewer.md/planner.md tell those BUILT-IN personas to always lead with a structured HANDOFF
+    // line — strip it before the human-facing post (never leak the raw JSON into the GitHub mirror)
+    // rather than posting out.text raw. A custom agent (customDef) has its OWN persona instead and
+    // was never told this convention, so it's left untouched. A @review step ALSO records the parsed
+    // verdict — previously this branch never called recordReview() at all, so evalGate()'s
+    // review:changes/review:approved conditions further down read a STALE verdict from a prior cycle.
+    let displayText = out.text;
+    if (!customDef && role === "reviewer") {
+      const rv = parseReviewVerdict(out.text);
+      if (!rv.structured) warnFallbackParse(repo, issue.number, "reviewer", "reviewer step reply missing a valid structured HANDOFF line — fell back to the APPROVE/REQUEST CHANGES keyword parse.");
+      displayText = rv.rest;
+      recordReview(repo, issue.number, rv.verdict, rv.rest);
+    } else if (!customDef && role === "planner") {
+      const { handoff, rest } = extractHandoffLine(out.text);
+      if (!handoff) warnFallbackParse(repo, issue.number, "planner", "planner step reply missing a valid structured HANDOFF line.");
+      displayText = rest;
     }
+    if (displayText.trim()) {
+      if (stepAuthor) await sayAs(repo, issue.number, stepAuthor, displayText);
+      else await say(repo, issue.number, role, displayText);
+    }
+    if (!customDef && role === "reviewer") refreshIssueDigest(repo, issue.number); // the say() above upserted BEFORE the verdict landed
     setSetting(cursorKey, String(i + 1)); // step done — resume continues AFTER it
     await runStepHooks(hookIds, "post", workdir, repo, issue.number);
     if (role === "decomposer") { await splitIntoPlanned(repo, issue, out.text).catch(() => {}); return; } // split → planned epics, end this run
