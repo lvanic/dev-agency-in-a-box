@@ -10,6 +10,24 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// Load lib/markdown.js + lib/toast.js (circular pair; markdown.js imports `html` from the vendor
+// bundle via an absolute path, so copy both into a temp dir rewriting that import) and return the
+// requested named exports. Used by the pure-function tests below (no jsdom needed).
+async function loadMarkdownLib(...names) {
+  const webDir = join(HERE, "..", "web");
+  const vendorUrl = pathToFileURL(join(webDir, "vendor", "standalone.mjs")).href;
+  const tmpDir = mkdtempSync(join(tmpdir(), "damd-"));
+  for (const f of ["markdown.js", "toast.js"]) {
+    const src = readFileSync(join(webDir, "lib", f), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
+    writeFileSync(join(tmpDir, f), src);
+  }
+  const mod = await import(pathToFileURL(join(tmpDir, "markdown.js")).href);
+  const toastMod = await import(pathToFileURL(join(tmpDir, "toast.js")).href);
+  const out = {};
+  for (const n of names) out[n] = (n in mod) ? mod[n] : toastMod[n];
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Shared helper: create a jsdom window, wire up the browser globals the app
 // needs, copy the web modules to a temp dir, mount the app, and return the
@@ -56,13 +74,13 @@ async function mountApp(opts = {}) {
 
   // The dashboard is split across ES modules in web/ that import each other relatively. Copy them
   // all into one temp dir (rewriting the absolute vendor import to a file URL) so Node can resolve
-  // the relative `./core.js` etc., then import the entry.
+  // the relative imports, then import the entry.
   const webDir = join(HERE, "..", "web");
   const vendorUrl = pathToFileURL(join(webDir, "vendor", "standalone.mjs")).href;
   const tmpDir = mkdtempSync(join(tmpdir(), "daui-"));
-  // Copy the old flat files (still referenced by the new components as temporary re-exports) + the
-  // new atomic-design directory tree (components/atoms, components/molecules, components/organisms,
-  // lib/, data/). Rewrite the absolute vendor import to a file URL in every .js file.
+  // Copy the flat entry files + the atomic-design directory tree (components/atoms,
+  // components/molecules, components/organisms, lib/, data/). Rewrite the absolute vendor import
+  // to a file URL in every .js file.
   const copyDir = (src, dest) => {
     mkdirSync(dest, { recursive: true });
     for (const entry of readdirSync(src)) {
@@ -76,9 +94,9 @@ async function mountApp(opts = {}) {
       }
     }
   };
-  // Copy the remaining flat .js files (core.js is still a shared-helper bridge; the rest of the UI
-  // lives in components/, lib/, data/ — the pre-atomic duplicates were deleted).
-  for (const f of ["core", "layout", "app"]) {
+  // Copy the remaining flat .js files (core.js was retired in P6 — the UI now lives entirely in
+  // components/, lib/, data/).
+  for (const f of ["layout", "app"]) {
     const src = readFileSync(join(webDir, f + ".js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
     writeFileSync(join(tmpDir, f + ".js"), src);
   }
@@ -376,15 +394,10 @@ test("repo dropdown is a plain repo switcher; auto-pills live in Settings > Repo
   dom.window.close();
 });
 
-// Pure unit tests for shapeToastMsg (web/core.js) — the toast-message tokenizer that splits a
-// string into text/url/path segments. core.js imports the vendor bundle via an absolute path, so
-// copy it to a temp dir rewriting that import, then import only the named export (no jsdom needed).
+// Pure unit tests for shapeToastMsg (web/lib/toast.js) — the toast-message tokenizer that splits a
+// string into text/url/path segments.
 test("shapeToastMsg tokenizes text, urls, paths and mixed messages", async () => {
-  const vendorUrl = pathToFileURL(join(HERE, "..", "web", "vendor", "standalone.mjs")).href;
-  const tmpDir = mkdtempSync(join(tmpdir(), "dacore-"));
-  const src = readFileSync(join(HERE, "..", "web", "core.js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-  writeFileSync(join(tmpDir, "core.js"), src);
-  const { shapeToastMsg } = await import(pathToFileURL(join(tmpDir, "core.js")).href);
+  const { shapeToastMsg } = await loadMarkdownLib("shapeToastMsg");
 
   const seg = (msg) => shapeToastMsg(msg);
 
@@ -424,15 +437,11 @@ test("shapeToastMsg tokenizes text, urls, paths and mixed messages", async () =>
   assert.deepEqual(seg("no segments here at all"), [{ t: "text", v: "no segments here at all" }], "no-segment message → one text segment");
 });
 
-// Pure unit tests for the live-markdown composer helpers (web/core.js): mdOverlay renders a
-// line-preserving preview (one <div> per source line, markers visible so the caret aligns), and
+// Pure unit tests for the live-markdown composer helpers (web/lib/markdown.js): mdOverlay renders
+// a line-preserving preview (one <div> per source line, markers visible so the caret aligns), and
 // continueMarkdownList auto-continues `- `/`1. ` on Enter.
 test("mdOverlay renders one div per line with list/header markers preserved", async () => {
-  const vendorUrl = pathToFileURL(join(HERE, "..", "web", "vendor", "standalone.mjs")).href;
-  const tmpDir = mkdtempSync(join(tmpdir(), "dacore-md-"));
-  const src = readFileSync(join(HERE, "..", "web", "core.js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-  writeFileSync(join(tmpDir, "core.js"), src);
-  const { mdOverlay } = await import(pathToFileURL(join(tmpDir, "core.js")).href);
+  const { mdOverlay } = await loadMarkdownLib("mdOverlay");
 
   assert.equal(mdOverlay(""), "", "empty input → empty preview");
   assert.equal(mdOverlay("hello world"), "<div>hello world</div>", "plain text is one div");
@@ -445,11 +454,7 @@ test("mdOverlay renders one div per line with list/header markers preserved", as
 });
 
 test("md renders root-relative /attach image & link URLs (not just http) — pasted images show inline", async () => {
-  const vendorUrl = pathToFileURL(join(HERE, "..", "web", "vendor", "standalone.mjs")).href;
-  const tmpDir = mkdtempSync(join(tmpdir(), "dacore-md3-"));
-  const src = readFileSync(join(HERE, "..", "web", "core.js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-  writeFileSync(join(tmpDir, "core.js"), src);
-  const { md } = await import(pathToFileURL(join(tmpDir, "core.js")).href);
+  const { md } = await loadMarkdownLib("md");
 
   // The bug: a pasted-image ref like ![image 1](/attach/<id>) stayed as literal text in comments
   // because the renderer only matched http(s) URLs. Root-relative /attach must render as <img>/<a>.
@@ -459,11 +464,7 @@ test("md renders root-relative /attach image & link URLs (not just http) — pas
 });
 
 test("continueMarkdownList continues `- ` and `1. ` at line end, exits on empty item", async () => {
-  const vendorUrl = pathToFileURL(join(HERE, "..", "web", "vendor", "standalone.mjs")).href;
-  const tmpDir = mkdtempSync(join(tmpdir(), "dacore-md2-"));
-  const src = readFileSync(join(HERE, "..", "web", "core.js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-  writeFileSync(join(tmpDir, "core.js"), src);
-  const { continueMarkdownList } = await import(pathToFileURL(join(tmpDir, "core.js")).href);
+  const { continueMarkdownList } = await loadMarkdownLib("continueMarkdownList");
 
   const mk = (value, pos) => ({ value, selectionStart: pos, selectionEnd: pos });
 
@@ -486,15 +487,11 @@ test("continueMarkdownList continues `- ` and `1. ` at line end, exits on empty 
   assert.equal(el.selectionStart, "1. first\n2. ".length, "caret after new ordered prefix");
 });
 
-// Unit test for md (web/core.js): local-first attachments are served from root-relative
+// Unit test for md (web/lib/markdown.js): local-first attachments are served from root-relative
 // /attach/<id> URLs, so the inline image/link renderer must accept them (not only http(s)),
 // otherwise pasted images stay as raw `![…](/attach/…)` text in comments (issue #87).
 test("md renders root-relative /attach image and link URLs", async () => {
-  const vendorUrl = pathToFileURL(join(HERE, "..", "web", "vendor", "standalone.mjs")).href;
-  const tmpDir = mkdtempSync(join(tmpdir(), "dacore-mdimg-"));
-  const src = readFileSync(join(HERE, "..", "web", "core.js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-  writeFileSync(join(tmpDir, "core.js"), src);
-  const { md } = await import(pathToFileURL(join(tmpDir, "core.js")).href);
+  const { md } = await loadMarkdownLib("md");
 
   const img = md("![image 1](/attach/5674948b82ae40d0b30e)");
   assert.match(img, /<img alt="image 1" src="\/attach\/5674948b82ae40d0b30e">/, "relative /attach image renders as <img>");
@@ -506,15 +503,12 @@ test("md renders root-relative /attach image and link URLs", async () => {
   assert.match(md("![x](https://e.com/a.png)"), /<img alt="x" src="https:\/\/e.com\/a.png">/, "absolute image still renders");
 });
 
-// Unit tests for getSetupProgress (web/core.js): derives the real clone/setup % from the live
-// activity stream. The backend streams `📥 cloning <repo>… NN%` (real git progress) and `🧭 …`
-// indexing lines; any later agent tool/text/start event ends the setup phase.
+// Unit tests for getSetupProgress (web/lib/setup-progress.js): derives the real clone/setup % from
+// the live activity stream. The backend streams `📥 cloning <repo>… NN%` (real git progress) and
+// `🧭 …` indexing lines; any later agent tool/text/start event ends the setup phase. This module
+// has no imports of its own, so it's imported directly (no vendor rewriting needed).
 test("getSetupProgress parses real clone % and ends setup on agent activity", async () => {
-  const vendorUrl = pathToFileURL(join(HERE, "..", "web", "vendor", "standalone.mjs")).href;
-  const tmpDir = mkdtempSync(join(tmpdir(), "dacore-sp-"));
-  const src = readFileSync(join(HERE, "..", "web", "core.js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-  writeFileSync(join(tmpDir, "core.js"), src);
-  const { getSetupProgress } = await import(pathToFileURL(join(tmpDir, "core.js")).href);
+  const { getSetupProgress } = await import("../web/lib/setup-progress.js");
 
   const ev = (kind, text) => ({ kind, text });
 
@@ -574,7 +568,7 @@ test("epic card nests its sub-issues and hides their standalone cards", async ()
   const webDir = join(HERE, "..", "web");
   const vendorUrl = pathToFileURL(join(webDir, "vendor", "standalone.mjs")).href;
   const tmpDir = mkdtempSync(join(tmpdir(), "dagrp-"));
-  for (const f of ["core", "layout"]) {
+  for (const f of ["layout"]) {
     const src = readFileSync(join(webDir, f + ".js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
     writeFileSync(join(tmpDir, f + ".js"), src);
   }

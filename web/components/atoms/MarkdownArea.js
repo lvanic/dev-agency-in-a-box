@@ -5,11 +5,8 @@
 // metrics, so the caret stays aligned with the rendered text.
 // mdOverlay keeps the markdown markers (`# `, `- `, `1. ` …) visible so the overlay aligns to the
 // raw input char-for-char; it only colours/bolds the content.
-//
-// NOTE: md, mdOverlay, escHtml, mdInline, continueMarkdownList live in core.js for now. They'll
-// move to lib/markdown.js in the next step; until then we import the helpers from there.
 import { html, useEffect, useRef } from "/web/vendor/standalone.mjs";
-import { mdOverlay, continueMarkdownList } from "../../core.js";
+import { mdOverlay, continueMarkdownList } from "../../lib/markdown.js";
 
 export function MarkdownArea({ value, onInput, onPaste, onKeyDown, placeholder, taRef, rows, maxHeight = 200, class: cls }) {
   const overlayRef = useRef(null);

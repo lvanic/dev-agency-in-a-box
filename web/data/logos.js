@@ -5,9 +5,8 @@
 //   generic icon for anything we don't have a logo for.
 //
 // Avatar persona maps: one avatar file per role (a mixed-gender team). Swap a value to change who
-//   represents a role. These are still consumed by core.js (Avatar / roleFromComment / commentBadge)
-//   until those are extracted; exported here so the eventual Avatar.js / ProviderLogo.js can import
-//   them.
+//   represents a role. ROLE_WORDS/ROLE_EMOJI back lib/comment-badge.js (roleFromComment /
+//   commentBadge); ROLE_AVATAR/AVATAR_POOL/NAMED_AVATAR are mirrored in components/atoms/Avatar.js.
 
 // Real provider/brand logos (@lobehub/icons-static-svg, MIT) vendored under /web/logos.
 export const PROVIDER_LOGOS = [

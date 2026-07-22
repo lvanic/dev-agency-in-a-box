@@ -1,20 +1,9 @@
-// Pure-function tests for the auth-gated model picker helpers in web/core.js.
-// Mirrors ui.test.mjs's copy-to-temp-dir trick so Node can import the relative `./core.js`
-// (the absolute /web/vendor/standalone.mjs import is rewritten to a file URL).
+// Pure-function tests for the auth-gated model picker helpers in web/lib/model-logic.js.
+// These are dependency-free pure functions, so they're imported directly — no jsdom/vendor
+// rewriting needed.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const webDir = join(HERE, "..", "web");
-const vendorUrl = pathToFileURL(join(webDir, "vendor", "standalone.mjs")).href;
-const tmpDir = mkdtempSync(join(tmpdir(), "dapicker-"));
-const src = readFileSync(join(webDir, "core.js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-writeFileSync(join(tmpDir, "core.js"), src);
-const { providerModelOptions, anyModelSetUp, modelAvailability } = await import(pathToFileURL(join(tmpDir, "core.js")).href);
+import { providerModelOptions, anyModelSetUp, modelAvailability } from "../web/lib/model-logic.js";
 
 const P = (over) => Object.assign({ id: "p", name: "P", baseUrl: "u", apiKey: "k", models: ["m1", "m2"] }, over);
 

@@ -33,6 +33,8 @@ export function shortModel(m) {
   return s.replace(/^claude-/, "");
 }
 
+export function ghUrl(repo, n) { return "https://github.com/" + repo + "/issues/" + n; }
+
 export function cap(s) {
   const t = String(s || "");
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;

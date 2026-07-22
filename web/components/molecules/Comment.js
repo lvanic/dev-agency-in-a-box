@@ -1,13 +1,12 @@
 // Comment molecule — a conversation comment (agency or human), with edit-in-place. Built from
-// atoms + lib functions. `commentBadge`/`roleFromComment`/`stripBadge` are temporarily imported
-// from core.js (not yet extracted to lib); md from lib/markdown, ago from lib/format.
+// atoms + lib functions.
 import { html, useState } from "/web/vendor/standalone.mjs";
 import { Avatar } from "../atoms/Avatar.js";
 import { Icon } from "../atoms/Icon.js";
 import { Spinner } from "../atoms/Spinner.js";
 import { md } from "../../lib/markdown.js";
 import { ago } from "../../lib/format.js";
-import { commentBadge, roleFromComment, stripBadge } from "../../core.js";
+import { commentBadge, roleFromComment, stripBadge } from "../../lib/comment-badge.js";
 
 export function Comment({ id, author, createdAt, body, isAgency, isSkel, incoming, avatars = true, onEdit, editable = false, agentsAfter = 0, onStopAgent = null }) {
   const [editing, setEditing] = useState(false);

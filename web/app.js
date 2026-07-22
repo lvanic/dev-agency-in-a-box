@@ -5,8 +5,9 @@ import { Icon } from "./components/atoms/Icon.js";
 import { Toasts } from "./components/molecules/Toasts.js";
 import { Workspace } from "./layout.js";
 import { Board, TabBar, nestedChildKeys } from "./components/organisms/Board.js";
-import { Composer, Detail } from "./components/organisms/Detail.js";
-import { SettingsShell } from "./components/organisms/Settings.js";
+import { Detail } from "./components/organisms/Detail.js";
+import { Composer } from "./components/organisms/IssueComposer.js";
+import { SettingsShell } from "./components/organisms/settings/SettingsShell.js";
 import { AddRepo, Onboarding } from "./components/organisms/Onboarding.js";
 import { SecretBanner, StatusLine, TopBar } from "./components/organisms/TopBar.js";
 import { Usage } from "./components/organisms/Usage.js";
@@ -97,17 +98,29 @@ function App() {
       setPending((ps) => ps.filter((p) => !(d.issues || []).some((i) => i.repo === p.repo && (i.number === p.number || (i.title || "") === p.title))));
     }).catch(() => {});
   }
-  // Poll /data every 5s, but NEVER while the tab is hidden (a backgrounded tab used to hammer the
-  // server + re-render forever). On becoming visible again, refresh immediately. SSE (/events) still
-  // streams live deltas, so a hidden tab loses nothing it can't catch up on instantly.
+  // /data refresh is stream-first: a role "start"/"done" (below, via /events) is exactly when an
+  // issue's lane can change (working/review/done, a PR appearing, …), so we refetch right then
+  // instead of waiting on a timer. The interval here is only a SLOW (60s) fallback for the handful
+  // of changes /events genuinely can't see: a GitHub edit made outside the agent (someone closes,
+  // merges, or relabels on github.com), another admin's action in a multi-user dashboard, or
+  // session/spend/secrets-health numbers drifting server-side — none of which emit an ActivityEvent.
+  // It's also skipped whenever the tab is hidden (a backgrounded tab used to hammer the server +
+  // re-render forever); becoming visible again triggers an immediate full refresh instead.
   useEffect(() => {
-    const tick = () => { if (typeof document === "undefined" || !document.hidden) load(true); };
     load(false);
-    const t = setInterval(tick, 5000);
+    const t = setInterval(() => { if (typeof document === "undefined" || !document.hidden) load(true); }, 60000);
     const onVis = () => { if (!document.hidden) load(false); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, []);
+  // Coalesce SSE-triggered /data refreshes the same way scheduleTick coalesces re-renders — a burst
+  // of start/done events (several issues finishing close together) should still be one /data fetch.
+  const loadPendingRef = useRef(false);
+  const scheduleDataLoad = () => {
+    if (loadPendingRef.current) return;
+    loadPendingRef.current = true;
+    setTimeout(() => { loadPendingRef.current = false; load(true); }, 400);
+  };
   useEffect(() => {
     let es; try { es = new EventSource("/events"); es.onmessage = (ev) => { try { const a = JSON.parse(ev.data);
       if (a && a.kind === "progress") {
@@ -119,9 +132,13 @@ function App() {
       } else {
         liveRef.current = liveRef.current.concat(a).slice(-200);
       }
-      // Surface run failures the user would otherwise only see on GitHub: an agent error is pushed
-      // as a "done" line starting with ❌ (e.g. a misconfigured model or a real rate-limit).
-      (Array.isArray(a) ? a : [a]).forEach((x) => { if (x && (x.kind === "error" || (x.kind === "done" && typeof x.text === "string" && x.text.trim().startsWith("❌")))) toast(String(x.text || "Run failed").replace(/^❌\s*/, ""), "error"); });
+      (Array.isArray(a) ? a : [a]).forEach((x) => {
+        // Surface run failures the user would otherwise only see on GitHub: an agent error is pushed
+        // as a "done" line starting with ❌ (e.g. a misconfigured model or a real rate-limit).
+        if (x && (x.kind === "error" || (x.kind === "done" && typeof x.text === "string" && x.text.trim().startsWith("❌")))) toast(String(x.text || "Run failed").replace(/^❌\s*/, ""), "error");
+        // A role starting/finishing is the live signal that /data's issue list is now stale — refetch.
+        if (x && (x.kind === "start" || x.kind === "done")) scheduleDataLoad();
+      });
       scheduleTick(); } catch (e) {} }; } catch (e) {}
     return () => { try { es && es.close(); } catch (e) {} };
   }, []);

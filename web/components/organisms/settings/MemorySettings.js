@@ -1,15 +1,16 @@
-// Organism — Memory tab (prime-time-plan P4.9): the human-readable/editable knowledge base.
+// Settings tab — Memory (prime-time-plan P4.9): the human-readable/editable knowledge base.
 // Lists the markdown that defines and teaches the agents (Constitution, personas, playbooks,
 // learned notes) and edits them through the agent-editor API that already existed server-side
 // with no UI reaching it — GET /agents (list), GET /agent?path= (content + revisions),
 // POST /agent-save (live override, versioned), POST /agent-revert (drop override → on-disk
 // default). Edits apply live (no redeploy); every change is kept in agent_revisions history.
+// Relocated from organisms/MemorySettings.js into organisms/settings/ (P6 split); logic unchanged.
 import { html, useState, useEffect, useRef } from "/web/vendor/standalone.mjs";
-import { Icon } from "../atoms/Icon.js";
-import { Spinner } from "../atoms/Spinner.js";
-import { MarkdownArea } from "../atoms/MarkdownArea.js";
-import { api, getJSON } from "../../lib/api.js";
-import { toast } from "../../lib/toast.js";
+import { Icon } from "../../atoms/Icon.js";
+import { Spinner } from "../../atoms/Spinner.js";
+import { MarkdownArea } from "../../atoms/MarkdownArea.js";
+import { api, getJSON } from "../../../lib/api.js";
+import { toast } from "../../../lib/toast.js";
 
 const GROUPS = [
   { k: "core", label: "Core" },

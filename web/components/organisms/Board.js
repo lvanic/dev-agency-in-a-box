@@ -1,7 +1,6 @@
 // Organism — Board. Extracted from web/board.js; logic unchanged.
 // The Kanban board: columns, cards, sub-issue lists, board controls, and the compact card timeline.
-// Imports atoms + molecules + lib from their new (split) locations. ghUrl hasn't been extracted to
-// lib yet — temporarily pulled from the old core.js.
+// Imports atoms + molecules + lib from their new (split) locations.
 import { html, useState, useEffect, useMemo } from "/web/vendor/standalone.mjs";
 import { Icon } from "../atoms/Icon.js";
 import { Avatar } from "../atoms/Avatar.js";
@@ -10,13 +9,11 @@ import { ProviderLogo } from "../atoms/ProviderLogo.js";
 import { Breadcrumb } from "../atoms/Breadcrumb.js";
 import { ModelSelect } from "../molecules/ModelSelect.js";
 import { api } from "../../lib/api.js";
-import { ago, fmtTok, tokHeat, usageTitle } from "../../lib/format.js";
+import { ago, fmtTok, tokHeat, usageTitle, ghUrl } from "../../lib/format.js";
 import { toast } from "../../lib/toast.js";
 import { isDone, classify, statusChip, COLS, boardSortCmp, filterByTime } from "../../lib/issue-logic.js";
 import { defaultModelLabel } from "../../lib/model-logic.js";
 import { getSetupProgress } from "../../lib/setup-progress.js";
-// ghUrl hasn't been extracted to lib yet — temporarily pulled from the old core.js.
-import { ghUrl } from "../../core.js";
 
 // ---------- sort / group / time options ----------
 

@@ -9,9 +9,7 @@ import { Avatar } from "../atoms/Avatar.js";
 import { Icon } from "../atoms/Icon.js";
 import { Spinner } from "../atoms/Spinner.js";
 import { Breadcrumb } from "../atoms/Breadcrumb.js";
-import { ago, fmtTok, tokHeat, usageTitle } from "../../lib/format.js";
-// ghUrl hasn't been extracted to lib yet — temporarily pulled from the old core.js.
-import { ghUrl } from "../../core.js";
+import { ago, fmtTok, tokHeat, usageTitle, ghUrl } from "../../lib/format.js";
 import { isDone, classify, statusChip, filterByTime } from "../../lib/issue-logic.js";
 import { nestedChildKeys } from "./Board.js";
 export { WorkflowTimelineImpl as WorkflowTimeline };

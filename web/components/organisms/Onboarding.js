@@ -3,7 +3,7 @@
 //
 // Imports atoms + molecules + lib from their new (split) locations. OB_PROVIDERS now comes from
 // data/providers.js (the canonical home, which breaks the old settings↔onboarding import cycle).
-// GitHubConnect lives in the Settings organism now, so it's imported from there.
+// GitHubConnect lives in the Settings organism's github section, so it's imported from there.
 import { html, useState, useEffect } from "/web/vendor/standalone.mjs";
 import { Icon } from "../atoms/Icon.js";
 import { Spinner } from "../atoms/Spinner.js";
@@ -14,7 +14,7 @@ import { RepoPicker } from "../molecules/RepoPicker.js";
 import { api, getJSON } from "../../lib/api.js";
 import { toast } from "../../lib/toast.js";
 import { OB_PROVIDERS } from "../../data/providers.js";
-import { GitHubConnect } from "./Settings.js";
+import { GitHubConnect } from "./settings/GithubSection.js";
 
 
 // ---------- onboarding wizard ----------

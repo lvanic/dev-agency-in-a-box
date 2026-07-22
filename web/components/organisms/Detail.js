@@ -1,37 +1,27 @@
-// Organism — Detail. Extracted from web/detail.js; logic unchanged.
-// The issue detail pane: conversation thread, live activity stream, toolbar actions, per-step
-// model pickers on the timeline, and the new-issue composer.
+// Organism — Detail. Extracted from web/detail.js; logic unchanged. Split further in P6 into
+// molecules with clear seams: RunHeader (title/toolbar/tabs), ThreadPane (conversation), StreamPane
+// (live activity), ComposerDock (reply box), DetailTimeline (workflow step timeline), EpicChecklist
+// and RunApp — this file keeps the STATE and business logic (thread loading, toolbar action-button
+// construction, SSE-driven live updates) and composes those molecules for the render.
 //
-// Imports atoms + molecules + lib from their new (split) locations. The Comment renderer is now the
-// shared molecule ../molecules/Comment.js; timelineModel comes from the molecule Timeline. ghUrl and
-// the badge helpers haven't been extracted to lib yet — ghUrl is temporarily pulled from core.js
-// (the badge helpers live inside the Comment molecule, so they're not needed here).
+// The issue detail pane: conversation thread, live activity stream, toolbar actions, per-step
+// model pickers on the timeline, and the new-issue composer (now organisms/IssueComposer.js).
 import { html, useState, useEffect, useRef } from "/web/vendor/standalone.mjs";
 import { Icon } from "../atoms/Icon.js";
-import { Avatar } from "../atoms/Avatar.js";
 import { Spinner } from "../atoms/Spinner.js";
 import { ProviderLogo } from "../atoms/ProviderLogo.js";
-import { Select } from "../atoms/Select.js";
-import { Modal } from "../atoms/Modal.js";
-import { Breadcrumb } from "../atoms/Breadcrumb.js";
-import { MarkdownArea } from "../atoms/MarkdownArea.js";
-import { ModelSelect } from "../molecules/ModelSelect.js";
-import { Comment } from "../molecules/Comment.js";
-import { ChatComposer } from "../molecules/ChatComposer.js";
-import { AttachmentThumbs } from "../molecules/AttachmentThumbs.js";
-import { RunSelector } from "../molecules/RunSelector.js";
+import { RunApp } from "../molecules/RunApp.js";
+import { RunHeader } from "../molecules/RunHeader.js";
+import { ThreadPane } from "../molecules/ThreadPane.js";
+import { StreamPane } from "../molecules/StreamPane.js";
+import { ComposerDock } from "../molecules/ComposerDock.js";
+import { DetailTimeline } from "../molecules/DetailTimeline.js";
 import { timelineModel } from "../molecules/Timeline.js";
 import { api, getJSON } from "../../lib/api.js";
-import { ago, cap, fmtTok, tokHeat, usageTitle, shortModel } from "../../lib/format.js";
-import { toast, readAttach } from "../../lib/toast.js";
-import { isDone, statusChip } from "../../lib/issue-logic.js";
-import { defaultModelLabel, parseModelRef, providerModelOptions } from "../../lib/model-logic.js";
-import { resolveAgentModel } from "../../lib/agent-options.js";
-import { getSetupProgress } from "../../lib/setup-progress.js";
-import { agentOptions, agentOnlyOptions } from "../../lib/agent-options.js";
-// ghUrl hasn't been extracted to lib yet — temporarily pulled from the old core.js.
-import { ghUrl } from "../../core.js";
-
+import { toast } from "../../lib/toast.js";
+import { isDone } from "../../lib/issue-logic.js";
+import { defaultModelLabel } from "../../lib/model-logic.js";
+import { agentOnlyOptions } from "../../lib/agent-options.js";
 
 // ---------- Detail ----------
 export function Detail({ issue, activity, act, isDesktop, startError, onClose, onOpenIssue, data, isOnline = true, onQueueComment, docked = false, onOpenModels }) {
@@ -41,9 +31,6 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   const [appInfo, setAppInfo] = useState(null);
   const [reply, setReply] = useState("");
   const [replyAgent, setReplyAgent] = useState(""); // address a specific agent in chat (user-chosen)
-  // Map a role to its @-handle. Used only for the dropdown's OPTIONS (the user picks explicitly —
-  // no auto-preselection, which was silently prepending "@dev " to every chat message the user typed).
-  const roleHandle = (role) => role ? ("@" + String(role).toLowerCase().replace("developer","dev").replace("planner","plan").replace("reviewer","review").replace("tester","test").replace("architect","arch")) : "";
   const [busy, setBusy] = useState(false);
   const [armed, setArmed] = useState(""); // two-tap confirm: which destructive action is armed
   const [moreOpen, setMoreOpen] = useState(false); // toolbar "More" overflow menu
@@ -177,6 +164,12 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
     return out.slice(-60);
   })();
   useEffect(() => { const el = streamRef.current; if (el && stickRef.current) el.scrollTop = el.scrollHeight; });
+  function onStreamScroll(e) {
+    const el = e.target;
+    const atB = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    stickRef.current = atB;
+    setStreamAtBottom(atB);
+  }
 
   const review = (pr && pr.review && pr.review.verdict) || issue.review || null;
   // Live conflict signal once /pr-status loads; before that, fall back to the stored flag from /data
@@ -329,404 +322,34 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   moreItems.push({ sep: true });
   moreItems.push(html`<button class=${"menu-item danger" + (db ? " busy" : "")} disabled=${db} onClick=${() => confirmAct("del", () => act.del(repo, number))}>${db ? html`<${Spinner} size=${15}/>` : html`<${Icon} name="trash" size=${15}/>`}<span class="mi-label">${db ? "Deleting…" : da ? "Tap again to delete" : "Delete"}</span></button>`);
 
-  const streamPane = html`<div class="dpane side">
-    ${startError ? html`<div class="secbanner">⚠ ${startError}</div>` : null}
-    ${(() => { const sp = getSetupProgress(stream); if (!sp) return null; const pct = sp.percent == null ? null : sp.percent; return html`<div class="setupbar" title=${sp.phase}><div class="setupbar-track"><div class="setupbar-fill" style=${pct == null ? "width:100%" : "width:" + pct + "%"}></div></div><span class="setupbar-lbl">${pct == null ? html`<${Spinner} size=${11}/> ` : pct + "% · "}${sp.phase}</span></div>`; })()}
-    <div class="dstream" ref=${streamRef} onScroll=${(e) => { const el = e.target; const atB = el.scrollHeight - el.scrollTop - el.clientHeight < 50; stickRef.current = atB; setStreamAtBottom(atB); }}>
-      ${stream.length ? stream.map((a, idx) => { const ts = a.ts || (a.created_at ? new Date(a.created_at).getTime() : 0); const tstr = ts ? new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "";
-        // "progress" = a single self-updating meter row (SSE replaces same-label ticks upstream).
-        if (a.kind === "progress") return html`<div key=${idx} class="l tool lprog">${tstr ? html`<span class="l-ts">${tstr}</span> ` : null}<span class="lprog-lbl">${a.text}</span><span class="lprog-track"><span class="lprog-fill" style=${"width:" + (a.pct || 0) + "%"}></span></span><span class="lprog-pct">${a.pct != null ? a.pct + "%" : ""}</span></div>`;
-        return html`<div key=${idx} class=${"l " + (a.kind === "tool" ? "tool" : a.kind === "start" || a.kind === "done" ? "muted" : a.kind === "delta" ? "delta" : "")}>${tstr ? html`<span class="l-ts">${tstr}</span> ` : null}${a.text}</div>`; }) : html`<div class="l muted">${startError ? "Failed to start." : "No live activity yet."}</div>`}
-      ${!streamAtBottom ? html`<div class="scroll-fab-wrap"><button class="iconbtn scroll-fab" title="Scroll to bottom" onClick=${() => { const el = streamRef.current; if (el) el.scrollTop = el.scrollHeight; }}><${Icon} name="chevdown" size=${14}/></button></div>` : null}
-    </div>
-  </div>`;
+  const streamPane = html`<${StreamPane} startError=${startError} stream=${stream} streamRef=${streamRef} streamAtBottom=${streamAtBottom} onScroll=${onStreamScroll}/>`;
 
-  const prBar = issue.pr_url ? (() => {
-    const ma = armed === "merge", mb = bz("merge");
-    const prMergedBar = !!(pr && pr.merge && pr.merge.merged);
-    return html`<div class="prbar">
-      <span class="prbar-l"><${Icon} name="pr" size=${15}/> PR #${issue.pr_number}${prMergedBar ? html` · <span style="color:var(--green)">merged ✓</span>` : review === "approved" ? html` · <span style="color:var(--green)">approved</span>` : review === "changes" ? html` · <span style="color:var(--red)">changes requested</span>` : ""}</span>
-      <a class="btn ghost" href=${issue.pr_url} target="_blank" rel="noopener"><${Icon} name="link" size=${14}/> Open on GitHub</a>
-      ${conflict ? html`<span class="muted" style="font-size:12px">conflicts — resolve first</span>`
-        : review === "changes" ? html`<button class=${"btn " + (bz("fix") ? "" : "primary")} disabled=${bz("fix")} onClick=${() => act.fix(repo, number).then(onClose)}>${bz("fix") ? html`<${Spinner} size=${14}/>` : html`<${Icon} name="wrench" size=${14}/>`} Fix</button>` : null}
-      ${!conflict && !prMergedBar ? html`<button class=${"btn green" + (mb ? " busy" : "")} disabled=${mb} onClick=${() => confirmAct("merge", () => act.merge(repo, number).then(onClose))}>${mb ? html`<${Spinner} size=${14}/> Merging…` : html`<${Icon} name="merge" size=${14}/> ${ma ? "Confirm merge" : review === "changes" ? "Merge anyway" : "Merge"}`}</button>` : null}
-    </div>`;
-  })() : null;
-  const conflictBox = conflict ? html`<div class="conflictbox">
-    <div class="conflictbox-h"><${Icon} name="merge" size=${15}/> Merge conflicts with main</div>
-    <div class="conflictbox-b">This PR can't be merged until the conflicts are resolved.${conflictFiles.length ? html` ${conflictFiles.length} conflicting file${conflictFiles.length > 1 ? "s" : ""}:` : ""}</div>
-    ${conflictFiles.length ? html`<ul class="conflictbox-files">${conflictFiles.map((f) => html`<li key=${f}><a href=${"https://github.com/" + repo + "/blob/agency/issue-" + number + "/" + f} target="_blank" rel="noopener"><${Icon} name="link" size=${11}/> ${f}</a></li>`)}</ul>` : null}
-    <button class=${"btn primary" + (bz("fix") ? " busy" : "")} disabled=${bz("fix")} onClick=${() => act.fix(repo, number)}>${bz("fix") ? html`<${Spinner} size=${14}/> Resolving…` : html`<${Icon} name="wrench" size=${14}/> Fix merge conflicts`}</button>
-  </div>` : null;
-
-  const chatPane = html`<div class="dpane chat" ref=${chatRef} onScroll=${onChatScroll}>
-    ${!chatAtTop ? html`<div class="scroll-fab-wrap top"><button class="iconbtn scroll-fab" title="Scroll to top" onClick=${() => { chatRef.current.scrollTop = 0; }}><${Icon} name="chevup" size=${16}/></button></div>` : null}
-    ${issue.epic ? html`<${EpicChecklist} epic=${{ ...issue.epic, parent: number }} repo=${repo} onOpen=${onOpenIssue} onClose=${() => act.close(repo, number).then(onClose)} closing=${act.isBusy("close", repo, number)} act=${act} data=${data} onOpenModels=${onOpenModels}/>` : null}
-    ${conflictBox}
-    ${issue.blocked === "held" ? html`<div class="heldbar">
-      <span class="heldbar__l"><${Icon} name="clock" size=${15}/> Workflow on hold${(issue.steers && issue.steers.length) ? html` · ${issue.steers.length} steer${issue.steers.length > 1 ? "s" : ""} queued` : ""}</span>
-      <button class=${"btn primary" + (bz("resume") ? " busy" : "")} disabled=${bz("resume")} onClick=${() => act.resume(repo, number)}>${bz("resume") ? html`<${Spinner} size=${14}/>` : html`<${Icon} name="play" size=${14}/>`} Resume</button>
-    </div>` : null}
-    <div class="sec">Conversation</div>
-    ${thread === null ? html`<div class="muted">Loading…</div>`
-      : thread._err ? html`<div class="muted" style="color:var(--red);display:flex;align-items:center;gap:8px">${thread._err} <button class="btn" onClick=${loadThread}>Retry</button></div>`
-      : html`<div>
-        ${thread.body ? html`<${Comment} author=${thread.author} createdAt=${thread.createdAt} body=${thread.body} isAgency=${false}/>` : null}
-        ${(() => {
-          const cs = thread.comments || [];
-          // Index of the LAST human (non-agency) comment — only that one is editable.
-          let lastHumanIdx = -1;
-          for (let n = 0; n < cs.length; n++) if (!cs[n].isAgency) lastHumanIdx = n;
-          // How many agent comments follow that last human comment.
-          const agentsAfter = lastHumanIdx >= 0 ? cs.slice(lastHumanIdx + 1).filter((x) => x.isAgency).length : 0;
-          return cs.map((c, n) => {
-            const isLastHuman = n === lastHumanIdx;
-            // Editable only on the last human comment, and only while ≤1 agent has replied after it.
-            const editable = isLastHuman && agentsAfter <= 1;
-            // If exactly one agent replied, editing must halt that agent. If >1, no edit — only stop.
-            const onEditFn = editable ? editComment : null;
-            const onStop = (isLastHuman && agentsAfter >= 1 && running) ? (() => act.stop(repo, number)) : null;
-            // editable+1-agent: saving the edit should also halt that one agent so it re-reads the edit.
-            return html`<${Comment} key=${c.localId || c.id || c.createdAt} id=${c.id} author=${c.author} createdAt=${c.createdAt} body=${c.body} isAgency=${c.isAgency} incoming=${c.incoming} avatars=${(data && data.config && data.config.avatars) !== "off"} onEdit=${onEditFn} editable=${editable} agentsAfter=${isLastHuman ? agentsAfter : 0} onStopAgent=${onStop}/>`;
-          });
-        })()}
-        ${pendingComments.map((p) => html`<${Comment} key=${"skel-" + p.id} author=${p.author} createdAt=${p.createdAt} body=${p.body} isAgency=${false} isSkel=${true}/>`)}
-      </div>`}
-    ${!chatAtBottom ? html`<div class="scroll-fab-wrap"><button class="iconbtn scroll-fab" title="Scroll to bottom" onClick=${() => { chatRef.current.scrollTop = chatRef.current.scrollHeight; }}><${Icon} name="chevdown" size=${16}/></button></div>` : null}
-    ${prBar}
-  </div>`;
+  const chatPane = html`<${ThreadPane}
+    issue=${issue} repo=${repo} number=${number} act=${act} data=${data}
+    onOpenIssue=${onOpenIssue} onClose=${onClose} onOpenModels=${onOpenModels}
+    thread=${thread} loadThread=${loadThread} editComment=${editComment} pendingComments=${pendingComments}
+    chatRef=${chatRef} onChatScroll=${onChatScroll} chatAtTop=${chatAtTop} chatAtBottom=${chatAtBottom}
+    running=${running} review=${review} pr=${pr} conflict=${conflict} conflictFiles=${conflictFiles}
+    armed=${armed} confirmAct=${confirmAct}
+  />`;
 
   return html`<div class=${"detail on" + (docked ? " docked" : "")}>
-    <div class="dhead dh">
-      <div class="dh__t">
-        <div class="dh__title">${issue.title || "#" + number}</div>
-        <div class="dh__meta dmeta">
-          <${Breadcrumb} repo=${repo} number=${number} parent=${issue.epic && issue.epic.parent}/>
-          ${(() => { const sc = statusChip(issue); return html`<span class=${"da-status " + sc.cls}><span class="da-status__dot"></span>${sc.label}</span>`; })()}
-          ${(() => {
-            const h = tokHeat(issue);
-            if (!h.tokens) return null;
-            return html`<span class="heat tip" data-tip=${usageTitle(issue.usage)}>
-              <span class="heat__track"><span class="heat__fill" style=${"width:" + h.pct + "%;background:" + h.color}></span></span>
-              <span class="heat__lbl" style=${"color:" + (h.over ? "var(--red)" : "var(--ink-2)")}>${fmtTok(h.tokens)}</span>
-            </span>`;
-          })()}
-          <a href=${ghUrl(repo, number)} target="_blank" rel="noopener" onClick=${(e) => e.stopPropagation()} class="dh__gh" style="display:inline-flex;align-items:center;gap:3px">GitHub<${Icon} name="link" size=${12}/></a>
-        </div>
-      </div>
-      <button class="iconbtn ghost dclose" aria-label="Close" data-tip="Close" onClick=${onClose}><${Icon} name="x" size=${18}/></button>
-    </div>
-    <div class="dtoolbar">
-      ${html`<${RunSelector} issue=${issue} data=${data} act=${act} running=${running} modelOverride=${modelOverride} onModelChange=${updateModelOverride} onOpenModels=${onOpenModels}/>`}
-      <span class="dtoolbar__sep"></span>
-      ${tb}
-      ${tbLeft}
-      <span style="flex:1"></span>
-      ${runAppBtns}
-      ${tbRight}
-      ${moreItems.length ? html`<span class="dropwrap">
-        <button class="tbtn" data-tip="More actions" onClick=${() => setMoreOpen((o) => !o)}><${Icon} name=${moreOpen ? "x" : "menu"}/></button>
-        ${moreOpen ? html`<div class="dropscrim" onClick=${() => setMoreOpen(false)}></div><div class="dropmenu menu">${moreItems.map((it, i) => it && it.sep ? html`<div key=${i} class="menu-sep"></div>` : html`<span key=${i}>${it}</span>`)}</div>` : null}
-      </span>` : null}
-    </div>
-    ${!isDesktop ? html`<div class="segwrap"><div class="segctl">
-      <button class=${"segbtn" + (tab === "chat" ? " on" : "")} onClick=${() => setTab("chat")}>Chat</button>
-      <button class=${"segbtn" + (tab === "stream" ? " on" : "")} onClick=${() => setTab("stream")}>Stream</button>
-    </div></div>` : null}
+    <${RunHeader}
+      issue=${issue} repo=${repo} number=${number} onClose=${onClose} data=${data} act=${act}
+      running=${running} modelOverride=${modelOverride} onModelChange=${updateModelOverride} onOpenModels=${onOpenModels}
+      tb=${tb} tbLeft=${tbLeft} runAppBtns=${runAppBtns} tbRight=${tbRight} moreItems=${moreItems}
+      moreOpen=${moreOpen} setMoreOpen=${setMoreOpen} isDesktop=${isDesktop} tab=${tab} setTab=${setTab}
+    />
     <div class="dpanes">
       ${isDesktop ? html`${chatPane}${streamPane}` : tab === "chat" ? chatPane : streamPane}
     </div>
     ${timelineModel(issue).started ? html`<div class="dtl-timeline"><${DetailTimeline} issue=${issue} data=${data} onOpenModels=${onOpenModels}/></div>` : null}
-    <div class="dcompose">
-      <${ChatComposer}
-        value=${reply} onInput=${setReply} taRef=${taRef}
-        uploadCtx=${{ repo, number }}
-        placeholder=${running ? "Message the agent…  (queued until the run finishes)" : "Reply…  (Cmd+Enter sends, paste image to embed)"}
-        busy=${busy}
-        sendLabel=${running ? "Nudge" : "Send"} sendIcon=${running ? "messages" : "send"}
-        onSend=${sendFull}
-        extras=${html`<${Select} value=${replyAgent} options=${agentSelOpts} onChange=${setReplyAgent} placeholder="Just comment"/>
-          <${ModelSelect} providers=${providers} data=${data} value=${modelOverride} emit="object" onChange=${updateModelOverride} includeDefault=${true} defaultLabel="Default model" defaultHint=${defModelLabel} onSetUp=${onOpenModels} btnClass="iconbtn" trigger=${modelTrigger}/>`}
-        actions=${running ? html`<button class=${"btn tip" + (bz("hold") ? " busy" : "")} data-tip="Interrupt & steer — pauses the workflow at the next safe break and folds your message into the next step" disabled=${bz("hold")} onClick=${() => { const t = reply.trim(); act.hold(repo, number, t); if (t) setReply(""); }}>${bz("hold") ? html`<${Spinner} size=${15}/>` : html`<${Icon} name="stop" size=${15}/>`} Interrupt</button>` : null}
-      />
-    </div>
+    <${ComposerDock}
+      reply=${reply} setReply=${setReply} taRef=${taRef} repo=${repo} number=${number}
+      running=${running} busy=${busy} sendFull=${sendFull}
+      replyAgent=${replyAgent} setReplyAgent=${setReplyAgent} agentSelOpts=${agentSelOpts}
+      providers=${providers} data=${data} modelOverride=${modelOverride} updateModelOverride=${updateModelOverride}
+      modelTrigger=${modelTrigger} defModelLabel=${defModelLabel} onOpenModels=${onOpenModels} act=${act}
+    />
   </div>`;
-}
-
-// Epic parent: a checklist of every sub-issue (✓ done-when-merged / ○ open) — each row links to
-// the child's detail and carries its OWN model picker + play button, so you can route and start
-// any sub-issue individually. ▶ Play works ALL sub-issues in order (each merge auto-starts the
-// next); "Start next" runs just one; "Complete & close" appears when every child is done.
-function EpicChecklist({ epic, repo, onOpen, onClose, closing, act, data, onOpenModels }) {
-  const isKidDone = (c) => Boolean(c.closed) || c.state === "done";
-  const all = epic.total > 0 && epic.done >= epic.total;
-  const kids = (epic.children || []).slice().sort((a, b) => (isKidDone(a) === isKidDone(b) ? a.child - b.child : isKidDone(a) ? 1 : -1));
-  const startingKids = act && act.isBusy && act.isBusy("startChildren", repo, epic.parent || 0);
-  const playing = act && act.isBusy && act.isBusy("epicPlay", repo, epic.parent || 0);
-  const setKidModel = (c, mo) => {
-    c.model = mo || null; // optimistic
-    api("/model-override", { repo, number: c.child, model: mo || null }).catch((err) => toast("Couldn't set the model: " + ((err && err.message) || ""), "error"));
-  };
-  const kidModelTrigger = (cur) => (cur && cur.logo)
-    ? html`<span class="tip" data-tip=${cur.label} style="display:inline-flex"><${ProviderLogo} name=${cur.logo} size=${14}/></span>`
-    : html`<span class="tip" data-tip="Default model" style="display:inline-flex"><${Icon} name="sparkles" size=${14}/></span>`;
-  return html`<div class="epicbox">
-    <div class="sec" style="margin:10px 2px 6px">Sub-issues ${epic.done}/${epic.total}${all ? html` · <span class="epicalldone">all done ✓</span>` : null}${epic.auto && !all ? html` · <span class="epicalldone">auto-running ▶</span>` : null}</div>
-    <div class="epiclist">
-      ${kids.map((c) => html`<div key=${c.child} style="display:flex;align-items:center;gap:6px">
-        <button class="epicrow" style="flex:1" onClick=${() => onOpen(repo, c.child, c.title)} data-tip="Open sub-issue">
-          <span class=${"epicck " + (isKidDone(c) ? "done" : "open")}><${Icon} name=${isKidDone(c) ? "check" : "planned"} size=${14}/></span>
-          <span class="epicnum">#${c.child}</span>
-          <span class="epictitle">${c.title || "#" + c.child}</span>
-          <span class="substate" style="margin-left:auto;color:var(--ink-3);font-size:11px">${c.state || (c.closed ? "done" : "open")}</span>
-        </button>
-        ${html`<${ModelSelect} providers=${data && data.providers} data=${data} value=${c.model ? c.model.providerId + "/" + c.model.model : ""} emit="object" onChange=${(mo) => setKidModel(c, mo)} includeDefault=${true} defaultLabel="Default model" onSetUp=${onOpenModels} menuAlign="right" btnClass="iconbtn" trigger=${kidModelTrigger}/>`}
-        ${!isKidDone(c) && act ? html`<button class=${"iconbtn tip" + (act.isBusy("start", repo, c.child) ? " busy" : "")} data-tip=${"Start #" + c.child + " now"} disabled=${act.isBusy("start", repo, c.child) || c.state === "working"} onClick=${() => act.start(repo, c.child)}>${c.state === "working" ? html`<${Spinner} size=${13}/>` : html`<${Icon} name="play" size=${13}/>`}</button>` : null}
-      </div>`)}
-    </div>
-    ${!all && act ? html`<div style="display:flex;gap:8px;margin-top:9px">
-      ${epic.auto
-        ? html`<button class="btn" onClick=${() => act.epicPause(repo, epic.parent || 0)} style="flex:1;justify-content:center"><${Icon} name="planned" size=${15}/> Pause auto-run</button>`
-        : html`<button class=${"btn green" + (playing ? " busy" : "")} disabled=${playing} onClick=${() => act.epicPlay(repo, epic.parent || 0)} data-tip="Work ALL sub-issues in order — each merge starts the next" style="flex:1;justify-content:center">${playing ? html`<${Spinner} size=${15}/> Starting…` : html`<${Icon} name="play" size=${15}/> Play all in order`}</button>`}
-      <button class=${"btn primary" + (startingKids ? " busy" : "")} disabled=${startingKids} onClick=${() => act.startChildren(repo, epic.parent || 0)} style="flex:1;justify-content:center">${startingKids ? html`<${Spinner} size=${15}/> Starting…` : html`<${Icon} name="play" size=${15}/> Start next only`}</button>
-    </div>` : null}
-    ${all ? html`<button class="btn green" disabled=${closing} onClick=${onClose} style="margin-top:9px;width:100%;justify-content:center">${closing ? html`<${Spinner} size=${15}/> Closing…` : html`<${Icon} name="check" size=${15}/> Complete & close epic`}</button>` : null}
-  </div>`;
-}
-
-function RunApp({ repo, number, appInfo, issue, done }) {
-  if (!appInfo || appInfo.kind === "unknown" || appInfo.kind === "none") return null;
-  const kind = appInfo.kind, app = issue.app;
-  function copyRun() {
-    const nm = repo.split("/").pop();
-    const checkout = done ? "(git checkout main 2>/dev/null || git checkout master) && git pull -q" : "gh pr checkout " + number;
-    const cmd = 'd=~/.devagency/' + nm + '; gh repo clone ' + repo + ' "$d" 2>/dev/null; cd "$d" && git fetch -q && ' + checkout + ' && { corepack enable 2>/dev/null; PM=npm; [ -f pnpm-lock.yaml ]&&PM=pnpm; [ -f yarn.lock ]&&PM=yarn; $PM install && ($PM run tauri:dev || $PM tauri dev || $PM run dev); }';
-    (navigator.clipboard ? navigator.clipboard.writeText(cmd) : Promise.reject()).then(() => toast("Copied — paste in Terminal & Enter"), () => toast("Copy failed"));
-  }
-  return html`${kind === "tauri" ? html`<button class="tbtn tip" data-tip="Run on my Mac — copies a one-liner to clone, checkout & launch this branch" onClick=${copyRun}><${Icon} name="laptop"/><span class="tlabel">Run on my Mac</span></button>` : null}
-    ${app && app.status === "running" ? html`<a class="tbtn tip" data-tip="Open the running app" href=${app.url} target="_blank" rel="noopener"><${Icon} name="monitor"/><span class="tlabel">Open app</span></a><button class="tbtn tip" data-tip="Stop the app" onClick=${() => api("/app-stop", { repo, number }).then(() => toast("Stopped"))}><${Icon} name="stop"/></button>`
-      : app && (app.status === "installing" || app.status === "starting") ? html`<span class="tbtn" style="pointer-events:none">⏳ ${app.status}…</span>`
-      : kind === "web" ? html`<button class="tbtn tip" data-tip="Run a web preview" onClick=${() => api("/app-run", { repo, number }).then((r) => toast(r && r.error ? r.error : "Starting preview…")).catch(() => toast("Couldn’t start", "error"))}><${Icon} name="play"/><span class="tlabel">Run preview</span></button>` : null}`;
-}
-
-// Map a workflow's steps to per-step model targets — the storage KEY each step routes by must match
-// the server's resolveAssignment (built-in handle → role name; custom agent → handle without @), all
-// lowercased. Deduped so a role used in two steps shows one picker (the store is per-agent, not per-step).
-const STEP_ROLE_KEY = { "@dev": "developer", "@plan": "planner", "@arch": "architect", "@review": "reviewer", "@test": "tester", "@split": "decomposer" };
-export function stepModelTargets(wf, agentDefs, data) {
-  const defs = agentDefs || [];
-  const rm = (data && data.roleModels) || {};
-  const seen = new Set(); const out = [];
-  for (const s of (wf && wf.steps || [])) {
-    const handle = (s.agent || "").toLowerCase();
-    if (!handle) continue;
-    const builtin = STEP_ROLE_KEY[handle];
-    // The editable agentDef driving this step: match by handle, else (for a built-in handle) by the
-    // role NAME — so @test finds the "tester" agent and uses ITS configured model, not the app default.
-    const def = defs.find((d) => (d.handle || ("@" + d.name)).toLowerCase() === handle || d.name.toLowerCase() === handle.replace(/^@/, ""))
-      || (builtin ? defs.find((d) => d.name.toLowerCase() === builtin) : null);
-    // Storage key the server resolves by (built-in role name, or a custom agent's handle w/o @).
-    const key = (builtin || (def ? (def.handle || ("@" + def.name)).replace(/^@/, "") : handle.replace(/^@/, ""))).toLowerCase();
-    if (seen.has(key)) continue; seen.add(key);
-    const name = def ? def.name : (builtin || handle.replace(/^@/, ""));
-    // The model this step resolves to absent a per-issue override — step.model → agent's model →
-    // per-role model (Settings → Models) → global. Tier words resolve to concrete models for display.
-    const roleM = rm[key] && rm[key].model ? { ref: rm[key].providerId + "/" + rm[key].model, short: shortModel(rm[key].model), provider: ((data.providers || []).find((p) => p.id === rm[key].providerId) || {}).name } : null;
-    // The effective raw model source (step override → agent definition → role), to detect a bare tier
-    // word so the default label reads "default: Medium" rather than the resolved model name.
-    const rawModel = (s.model && String(s.model).trim()) || (def && def.model && String(def.model).trim()) || (rm[key] && rm[key].model ? rm[key].providerId + "/" + rm[key].model : "");
-    const tierHit = rawModel && ["high", "medium", "low"].indexOf(String(rawModel).toLowerCase()) >= 0 ? String(rawModel).toLowerCase() : "";
-    const m = resolveAgentModel(s.model, data) || resolveAgentModel(def && def.model, data) || roleM || null;
-    // Default label: "default: <Tier|modelName>" — a tier pick shows the tier word, else the model name.
-    const dfltLabel = tierHit ? "default: " + cap(tierHit) : (m ? "default: " + m.short : "");
-    out.push({ key, label: cap(name), dfltRef: m ? m.ref : "", dflt: dfltLabel, dfltShort: m ? m.short : "", dfltProvider: m ? m.provider : "" });
-  }
-  return out;
-}
-
-// ---------- Detail timeline (bottom of the drawer) ----------
-// Same status convention as the List/Board timeline (WorkflowTimelineImpl): only the step actually
-// running or parked shows a face — a live spinner while the agent works, its avatar while blocked on
-// it. Every other dot is a plain status icon (check = done, alert = attention, empty = pending), not
-// a wall of avatars (#152: the first restore showed every step's face always, since `s.role` is set
-// on every step regardless of state). On a WORKFLOW issue every dot is STILL the trigger of a model
-// picker — including pending steps — so you can pre-set a future step's model before it runs; that
-// interactive variant was lost in the 41d0f88/28055d3 refactors and is restored here.
-function DetailTimeline({ issue, data, onOpenModels }) {
-  const m = timelineModel(issue);
-  if (m.epic || !m.started || !m.steps) return null;
-  const wf = ((data && data.workflows) || []).find((w) => w.id === issue.workflowId);
-  const targets = wf && m.workflow ? stepModelTargets(wf, data && data.agentDefs, data) : [];
-  const agentModels = issue.agentModels || {};
-  const providers = (data && data.providers) || [];
-  const modelOpts = providerModelOptions(providers, { short: true });
-  const live = !!(issue.active || issue.running);
-  return html`<div class="flow">
-    ${m.steps.map((s, idx) => {
-      const done = s.st === "done";
-      const current = idx === m.current && !done;
-      const blocked = s.st === "attention";
-      const cls = done ? "done" : current ? (blocked ? "blocked" : "current") : blocked ? "blocked" : "pending";
-      // Match the timeline step to its model target by ROLE KEY (both sides are the lowercased role
-      // name) — more robust than matching display labels, which can differ (ws.name vs agentDef name).
-      const roleKey = String(s.role || s.k || "").toLowerCase();
-      const target = targets.find((t) => t.key === roleKey) || targets.find((t) => (t.label || "").toLowerCase() === roleKey);
-      // The live per-issue override for this step's agent (if any), else its resolved default.
-      const curRef = target ? (agentModels[target.key] || target.dfltRef) : "";
-      const curOpt = curRef ? modelOpts.find((o) => o.value === curRef) : null;
-      const curLabel = curOpt ? curOpt.label : (target && target.dflt ? target.dflt : "");
-      const tip = cap(s.role || s.k) + (curLabel ? " · " + curLabel : "") + (target ? " — click to change model" : "");
-      const showSpin = current && live; // actually running right now
-      const showFace = current && !showSpin; // parked/blocked ON this step — show who
-      const icon = showSpin
-        ? html`<${Spinner} size=${16}/>`
-        : showFace
-          ? html`<span class="flow__face"><${Avatar} role=${s.role || issue.role} size=${20} crop="head"/></span>`
-          : done
-            ? html`<${Icon} name="check" size=${11}/>`
-            : blocked
-              ? html`<${Icon} name="alert" size=${11}/>`
-              : null;
-      const dot = html`<span class=${"flow__dot" + (showSpin ? " pulse" : "") + (showFace ? " flow__dot--face" : "")}>${icon}</span>`;
-      return html`
-        ${idx ? html`<span class=${"flow__line" + (idx <= m.current ? " on" : "")}></span>` : null}
-        <span class=${"flow__step " + cls}>
-          ${target
-            ? html`<span class="tip" data-tip=${tip}><${ModelSelect}
-                providers=${providers}
-                data=${data}
-                value=${curRef}
-                includeDefault=${true}
-                defaultLabel="Default"
-                defaultHint=${target.dflt || "default"}
-                onSetUp=${onOpenModels}
-                btnClass="flow__pick"
-                menuAlign=${idx >= m.steps.length - 2 ? "right" : "left"}
-                trigger=${() => dot}
-                onChange=${(v) => setStepModel(issue, target.key, v)}
-              /></span>`
-            : dot}
-          <span class="flow__lbl">${s.label}</span>
-        </span>`;
-    })}
-  </div>`;
-}
-
-// Write a per-step model override for this issue (live, via /issue-agent-model). Updates the local
-// issue object optimistically so the timeline reflects it immediately.
-function setStepModel(issue, key, value) {
-  if (!issue.agentModels) issue.agentModels = {};
-  if (value) issue.agentModels[key] = value; else delete issue.agentModels[key];
-  api("/issue-agent-model", { repo: issue.repo, number: issue.number, agent: key, model: value || "" })
-    .catch((err) => toast("Couldn't set step model: " + ((err && err.message) || ""), "error"));
-}
-
-// ---------- Composer ----------
-export function Composer({ repos, repo, setRepo, onClose, onCreate, data, onOpenModels }) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const ndraftKey = "draft:newissue:" + (repo || "_");
-  useEffect(() => { try { const d = JSON.parse(localStorage.getItem(ndraftKey) || "{}"); if (d.title) setTitle(d.title); if (d.body) setBody(d.body); } catch (e) {} }, [ndraftKey]);
-  useEffect(() => { try { if (title || body) localStorage.setItem(ndraftKey, JSON.stringify({ title, body })); else localStorage.removeItem(ndraftKey); } catch (e) {} }, [title, body, ndraftKey]);
-  const [role, setRole] = useState((data && data.config && data.config.newIssueDefault) || "@dev");
-  const [atts, setAtts] = useState([]);
-  const providers = data?.providers || [];
-  const anyModels = providers.some((p) => (p.models || []).length);
-  // Issue model: "" = default (resolves per agent's own setting), "@individual" = per-agent pickers,
-  // else a concrete providerId/model that overrides the WHOLE issue. Default is "" so the picker reads
-  // "Default" (not a pinned provider) — each step then uses its own configured model.
-  const [model, setModel] = useState("");
-  // Per-step model overrides when a WORKFLOW is selected — keyed by the step's resolution key
-  // (built-in role name, or a custom agent's handle without @), matching resolveAssignment on the server.
-  const selWf = (role || "").startsWith("@") ? (data && data.workflows || []).find((w) => w.trigger === role) : null;
-  const wfSteps = selWf ? stepModelTargets(selWf, data && data.agentDefs, data) : [];
-  const individual = model === "@individual";
-  const [stepModels, setStepModels] = useState({});
-  const taRef = useRef(null);
-  function submit(start) {
-    if (!repo || !title.trim()) { toast("Repo + title needed"); return; }
-    // A concrete whole-issue model wins; "Default"/"Individual" leave it unset (per-agent settings apply).
-    let modelOverride = null;
-    if (model && !individual) {
-      const [providerId, mName] = model.split("/");
-      modelOverride = { providerId, model: mName };
-    }
-    // Per-agent picks only when "Individual" is chosen; collect for THIS workflow's steps (dedup by key).
-    const agentModels = {};
-    if (individual) for (const s of wfSteps) { const v = stepModels[s.key]; if (v) agentModels[s.key] = v; }
-    onCreate(repo, role, title.trim(), body.trim(), start, atts.map((a) => ({ dataUrl: a.d, name: a.name, refId: a.refId })), modelOverride, Object.keys(agentModels).length ? agentModels : null);
-    try { localStorage.removeItem(ndraftKey); } catch (e) {}
-  }
-  function pick(e) { const fs = e.target.files || []; for (let i = 0; i < fs.length; i++) readAttach(fs[i], (a) => setAtts((x) => x.concat(a))); e.target.value = ""; }
-  function onPaste(e) {
-    const items = (e.clipboardData || {}).items || [];
-    const files = [];
-    for (let i = 0; i < items.length; i++) if (items[i].kind === "file") { const f = items[i].getAsFile(); if (f) files.push(f); }
-    if (!files.length) return; // plain text paste — let the browser handle it
-    // Handle the file(s) ourselves; stop the browser ALSO pasting the clipboard's text/plain (the
-    // local file PATH from tools like Clop), which raced our token and corrupted the caret.
-    e.preventDefault();
-    for (const file of files) {
-      if (/^image\//.test(file.type)) {
-        const imgNum = atts.filter((a) => a.img).length + 1;
-        const refId = "image " + imgNum;
-        const ta = taRef.current;
-        if (ta) {
-          const start = ta.selectionStart || 0, end = ta.selectionEnd || 0;
-          const token = "[" + refId + "]";
-          setBody((prev) => prev.slice(0, start) + token + prev.slice(end));
-          requestAnimationFrame(() => { if (ta) { const pos = start + token.length; ta.selectionStart = ta.selectionEnd = pos; ta.focus(); } });
-        }
-        readAttach(file, (a) => setAtts((x) => x.concat(Object.assign({}, a, { name: refId, refId }))));
-      } else {
-        readAttach(file, (a) => setAtts((x) => x.concat(a)));
-      }
-    }
-  }
-  const footer = html`
-    <label class="composer-icon tip" data-tip="Attach a file" style="margin-right:auto"><${Icon} name="paperclip" size=${18}/><input type="file" multiple style="display:none" onChange=${pick}/></label>
-    <button class="btn" onClick=${() => submit(false)}>Add to Planned</button>
-    <button class="btn primary" onClick=${() => submit(true)}><${Icon} name="play" size=${15}/> Start now</button>`;
-  return html`<${Modal} title="New issue" size="lg" onClose=${onClose} footer=${footer}>
-    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <${Select} value=${repo || ""} options=${repos.map((r) => ({ value: r, label: r.split("/").pop() }))} onChange=${setRepo}/>
-      <${Select} value=${role} options=${agentOptions(data && data.agentDefs, data && data.workflows)} onChange=${setRole}/>
-      ${html`<${ModelSelect} providers=${providers} data=${data} value=${model} btnClass="iconbtn-sm" onChange=${setModel} onSetUp=${onOpenModels}
-        includeDefault=${true} defaultLabel="Default model"
-        extraOptions=${selWf ? [{ value: "@individual", label: "Individual per agent", hint: "set each step", icon: "users" }] : []}
-        trigger=${(cur) => (cur && cur.logo)
-          ? html`<span class="tip" data-tip=${cur.label} style="display:inline-flex"><${ProviderLogo} name=${cur.logo} size=${16}/></span>`
-          : (cur && cur.icon === "users")
-          ? html`<span class="tip" data-tip="Individual model per agent" style="display:inline-flex"><${Icon} name="users" size=${16}/></span>`
-          : html`<span class="tip" data-tip=${"Default model · " + defaultModelLabel(data)} style="display:inline-flex"><${Icon} name="sparkles" size=${16}/></span>`}/>`}
-    </div>
-    ${individual && wfSteps.length && anyModels ? html`<div class="setgrp" style="margin-bottom:10px">
-      <div class="muted" style="font-size:12px;margin-bottom:10px">Model per step — the dot opens the picker; blank keeps each agent’s configured model.</div>
-      <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:flex-start">
-      ${wfSteps.map((s) => {
-        const curVal = stepModels[s.key] || "";
-        const curRef = curVal ? parseModelRef(curVal) : null;
-        const curProvider = curRef ? (providers.find((p) => p.id === curRef.providerId) || {}).name : "";
-        // Override picked → show that; else the agent's own configured model; else true default.
-        const effProvider = curProvider || s.dfltProvider;
-        const effShort = curRef ? curRef.model : (s.dfltShort || "Default");
-        return html`<div key=${s.key} style="display:flex;flex-direction:column;align-items:center;gap:4px;width:88px;text-align:center">
-          <${ModelSelect} providers=${providers} data=${data} value=${curVal} menuAlign="left" btnClass="iconbtn-sm" onSetUp=${onOpenModels}
-            includeDefault=${true} defaultLabel=${s.dflt || "Default"} defaultHint=${s.dfltProvider || defaultModelLabel(data)}
-            onChange=${(v) => setStepModels((m) => Object.assign({}, m, { [s.key]: v }))}
-            trigger=${() => effProvider
-              ? html`<span class="tip" data-tip=${effShort} style="display:inline-flex"><${ProviderLogo} name=${effProvider} size=${16}/></span>`
-              : html`<span class="tip" data-tip=${s.dflt || ("Default · " + defaultModelLabel(data))} style="display:inline-flex"><${Icon} name="sparkles" size=${16}/></span>`}/>
-          <span style="font-size:12px;font-weight:600;line-height:1.2">${s.label}</span>
-          <span style="font-size:11px;color:var(--ink-3);line-height:1.2;word-break:break-word">${effShort}</span>
-        </div>`;
-      })}
-      </div>
-    </div>` : null}
-    <input value=${title} onInput=${(e) => setTitle(e.target.value)} placeholder="What should it do?" style="margin-bottom:10px;font-size:15px;padding:10px 12px"/>
-    <div class="composer composer-lg">
-      <${AttachmentThumbs} atts=${atts} onReorder=${setAtts} onRemove=${(idx) => setAtts((x) => x.filter((_, j) => j !== idx))}/>
-      <${MarkdownArea} value=${body} taRef=${taRef} rows=${6} maxHeight=${400} placeholder="Details, context, acceptance criteria…  (Cmd+Enter starts, paste image to embed)" onInput=${(v) => setBody(v)} onPaste=${onPaste} onKeyDown=${(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); submit(true); } }}/>
-    </div>
-  <//>`;
 }

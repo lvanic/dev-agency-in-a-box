@@ -20,6 +20,21 @@ export function renderShell(): string {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+/* ── Breakpoint scale ───────────────────────────────────────────
+ * Three tokens only — every @media in this file rounds to the nearest:
+ *   560  — phone: hide non-essential chrome (brand wordmark, pill labels), go full-bleed
+ *          on overlays/menus that would otherwise be cramped at phone width.
+ *   760  — tablet/narrow-desktop: stack side-by-side panes (Settings shell, Detail pane,
+ *          Orchestrator), collapse a toolbar's own text.
+ *   880  — desktop cutover: the one hard boundary between the mobile and desktop layouts
+ *          (board columns, tab bar vs. desktop grid, sheet modal vs. centered dialog).
+ *          Written as a non-overlapping min/max pair — "min-width:880px" for the desktop
+ *          rules, "max-width:879px" for their mobile complement — so no pixel width matches
+ *          both, no build step, and no matchMedia float rounding to worry about (see also
+ *          useIsDesktop()/useViewportWidth() in lib/hooks.js, which mirror this exact 880px
+ *          cutover in JS).
+ * (prefers-reduced-motion is a capability query, not a viewport breakpoint — left alone.)
+ */
 /* ── Design tokens (Dev Agency design system) ──────────────────── */
 :root{
   /* Brand */
@@ -147,7 +162,7 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .da-avatar--head{background:transparent;border-color:transparent}
 .da-avatar--head img{object-fit:contain}
 
-/* legacy avatar wrapper (core.js Avatar) — frameless head art */
+/* avatar wrapper (components/atoms/Avatar.js) — frameless head art */
 .avi{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;line-height:0;overflow:visible}
 .avi img{width:100%;height:100%;object-fit:contain;object-position:center;display:block}
 .avi.full img{object-fit:contain;object-position:bottom}
@@ -482,7 +497,7 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .wfctl__sel:hover{background:var(--surface-2)!important}
 .wfctl__route .sel-cur{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wfctl__model .sel-cur{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
-@media (max-width:900px){.wfctl__route .sel-cur{max-width:110px}.wfctl__model .sel-cur{max-width:84px}}
+@media (max-width:880px){.wfctl__route .sel-cur{max-width:110px}.wfctl__model .sel-cur{max-width:84px}}
 .wfctl--running{align-items:center;gap:7px;padding:0 12px;height:38px;color:var(--ink-2);background:var(--surface-2);cursor:default}
 .wfctl__name{font-weight:500;color:var(--ink-1);white-space:nowrap}
 .dtoolbar__sep{width:1px;align-self:stretch;background:var(--line);margin:4px 4px}
@@ -680,7 +695,7 @@ html[data-theme="dark"] .gtip{background:#000;color:#fff}
 .repodrop{flex:0 1 auto;min-width:0}
 .topbtns{display:flex;align-items:center;gap:2px}
 .topburger{display:none}
-@media(max-width:680px){.topbtns{display:none}.topburger{display:inline-flex}}
+@media(max-width:760px){.topbtns{display:none}.topburger{display:inline-flex}}
 .repodrop-btn{display:inline-flex;align-items:center;gap:8px;max-width:min(60vw,360px);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:7px 14px;font:14px inherit;font-weight:600;cursor:pointer}
 .repodrop-btn:hover{border-color:var(--line-2)}
 .repodrop-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
