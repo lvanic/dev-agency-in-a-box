@@ -5,9 +5,40 @@
 import { html, useState, useEffect } from "/web/vendor/standalone.mjs";
 import { Icon } from "../atoms/Icon.js";
 import { Spinner } from "../atoms/Spinner.js";
+import { Modal } from "../atoms/Modal.js";
 import { api, getJSON } from "../../lib/api.js";
 import { ago, fmtTok, hm } from "../../lib/format.js";
 import { toast } from "../../lib/toast.js";
+
+// Deploy-safe runs: the agency's own repo can hold a ready-to-merge PR (self-merge quiet window,
+// src/deploySafety.ts) instead of merging immediately while other issues are in flight. This chip
+// surfaces that held update; clicking opens a confirm dialog ("Deploy now" flushes it right away —
+// interrupting the in-flight work on purpose — "Wait" just closes and leaves it queued; it also
+// flushes on its own once the pool goes quiet).
+export function UpdateReadyChip({ heldUpdates, active, reload }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!heldUpdates || !heldUpdates.length) return null;
+  const inFlight = (active || []).filter((a) => !heldUpdates.some((h) => h.repo === a.repo && h.number === a.number));
+  function deployNow() {
+    setBusy(true);
+    api("/deploy-now", {})
+      .then((r) => { toast("Deploying " + (r.merged || heldUpdates.length) + " update(s)…"); setOpen(false); reload(); })
+      .catch((e) => toast((e && e.message) || "Couldn’t deploy", "error"))
+      .finally(() => setBusy(false));
+  }
+  return html`<span class="statpop">
+    <span class="statlink" title="An agency update is ready — click to deploy now or wait" onClick=${() => setOpen(true)}>· <span class="andot amber"></span> Update ready</span>
+    ${open ? html`<${Modal} title="Deploy update?" onClose=${() => setOpen(false)} footer=${html`
+        <button class="btn ghost" onClick=${() => setOpen(false)}>Wait</button>
+        <button class="btn primary" disabled=${busy} onClick=${deployNow}>${busy ? "Deploying…" : "Deploy now"}</button>
+      `}>
+      <p>Redeploy for update — ${inFlight.length} issue${inFlight.length === 1 ? "" : "s"} currently being worked on${inFlight.length ? ":" : "."}</p>
+      ${inFlight.length ? html`<ul style="margin:6px 0 0;padding-left:18px">${inFlight.map((a) => html`<li key=${a.repo + "#" + a.number}>#${a.number} ${a.repo}</li>`)}</ul>` : null}
+      <p style="margin-top:10px;color:var(--ink-3);font-size:12.5px">Deploying will interrupt them — they auto-resume after the restart.</p>
+    </${Modal}>` : null}
+  </span>`;
+}
 
 
 export function SecretBanner({ h, onFix }) {
@@ -100,7 +131,7 @@ function analyzerStatus(an) {
   const stale = mins > 12 * 60;
   return { cls: stale ? "amber" : "green", text: seen, title: "Analyzer last pulled telemetry " + new Date(an.lastPull).toLocaleString() + (an.lastIssueAt ? "\nLast proposal: " + new Date(an.lastIssueAt).toLocaleString() : "") };
 }
-export function StatusLine({ working, session, spend, analyzer, reload, sort, setSort, offlineQ, syncing }) {
+export function StatusLine({ working, session, spend, analyzer, reload, sort, setSort, offlineQ, syncing, heldUpdates, active }) {
   const an = analyzerStatus(analyzer);
   const s = session || {};
   const pct = s.budget > 0 ? Math.min(100, Math.round((100 * s.tokens) / s.budget)) : 0;
@@ -181,6 +212,7 @@ export function StatusLine({ working, session, spend, analyzer, reload, sort, se
         </div>
       </div>` : null}
     </span>` : null}
+    <${UpdateReadyChip} heldUpdates=${heldUpdates} active=${active} reload=${reload}/>
     <span class="spacer"></span>
     ${setSort ? html`<span class="statpop">
       <span class="statlink" title="Sort the board cards" onClick=${() => setPop(pop === "sort" ? null : "sort")}>· sort: ${(sort && sort.key) === "name" ? "name" : "time"} ${(sort && sort.dir) === "asc" ? "↑" : "↓"}</span>

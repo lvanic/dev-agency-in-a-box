@@ -13,6 +13,7 @@ export function GeneralSection({ data, reload, admin }) {
   const [maxTok, setMaxTok] = useState(cfg.maxTokensPerRun || 600000);
   const [avatarsOn, setAvatarsOn] = useState(cfg.avatars !== "off");
   const [selfImprove, setSelfImprove] = useState(ops.self_improve != null ? !!ops.self_improve : true);
+  const [selfMergeHold, setSelfMergeHold] = useState(ops.self_merge_hold != null ? !!ops.self_merge_hold : true);
   const [newDefault, setNewDefault] = useState(cfg.newIssueDefault || "@dev");
   const [analyzerOn, setAnalyzerOn] = useState(ops.analyzer_enabled != null ? !!ops.analyzer_enabled : true);
   const [analyzerRepo, setAnalyzerRepo] = useState(ops.analyzer_repo || "");
@@ -34,6 +35,8 @@ export function GeneralSection({ data, reload, admin }) {
 
     ${admin ? html`<div class="sec" style="margin-top:18px">Automation</div>
       <label class="ckline"><input type="checkbox" checked=${selfImprove} onChange=${(e) => { setSelfImprove(e.target.checked); put({ ops: { self_improve: e.target.checked } }); }}/> Allow self-improvement PRs</label>
+      <div class="muted" style="font-size:12px;margin:6px 0 4px">When this repo's own PR is ready to merge while other issues are still running, hold it (dashboard shows an "Update ready" chip) instead of self-merging immediately — merging redeploys the container mid-run. Off restores immediate self-merging.</div>
+      <label class="ckline"><input type="checkbox" checked=${selfMergeHold} onChange=${(e) => { setSelfMergeHold(e.target.checked); put({ ops: { self_merge_hold: e.target.checked } }); }}/> Hold self-merges until other runs finish</label>
 
       <div class="sec" style="margin-top:18px">Process Analyzer</div>
       <div class="muted" style="font-size:12px;margin-bottom:6px">Self-improvement watchdog — reads aggregate telemetry (no secrets/issue bodies), opens advisory GitHub issues you approve. Needs the standalone <code>analyzer</code> service running (vendored in <code>./analyzer</code>, or its own deploy) and <code>ANALYZER_API_KEY</code> set.</div>

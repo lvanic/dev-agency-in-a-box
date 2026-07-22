@@ -361,7 +361,7 @@ function App() {
       ${sheet === "usage" && html`<${Usage} onClose=${() => setSheet(null)} onOpenIssue=${openIssue}/>`}
       ${sheet === "workflows" && html`<${WorkflowBuilder} data=${data} onClose=${() => setSheet(null)} reload=${load} onOpenModels=${() => setSheet("models")}/>`}
       ${data.user && data.onboarded === false && html`<${Onboarding} repos=${repos} github=${data.github} reload=${load}/>`}
-      <${StatusLine} working=${working} session=${data.session} spend=${data.spendToday} analyzer=${data.analyzer} reload=${load} offlineQ=${offlineQ} syncing=${syncing}/>
+      <${StatusLine} working=${working} session=${data.session} spend=${data.spendToday} analyzer=${data.analyzer} reload=${load} offlineQ=${offlineQ} syncing=${syncing} heldUpdates=${data.heldUpdates} active=${data.active}/>
       <${Toasts} toasts=${toasts} onDismiss=${dismissToast}/>
       ${tip ? html`<div class=${"gtip gtip--" + (tip.align || "center") + (tip.below ? " gtip--below" : "")} style=${"left:" + tip.x + "px;top:" + tip.y + "px"}>${tip.text}</div>` : null}
     </div>`;

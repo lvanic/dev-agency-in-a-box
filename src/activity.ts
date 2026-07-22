@@ -4,6 +4,7 @@
  * feed over SSE. Everything is keyed by repo+issue so it's correct under parallel runs.
  */
 import { recordActivity } from "./store.js";
+import { clearInterrupted } from "./db/deploy.js";
 
 export interface ActivityEvent {
   ts: number;
@@ -46,6 +47,11 @@ export function updateActiveRole(repo: string, number: number, role: string): vo
 }
 export function clearActive(repo: string, number: number): void {
   active.delete(akey(repo, number));
+  // Deploy-safe runs: every worker calls clearActive when its run for this issue ends (success or
+  // failure) — the ONE call site where "this run actually finished without being interrupted by
+  // another deploy" is known. Clear any stale interrupted-run marker here (see runner.ts's
+  // autoResumeInterrupted / gracefulShutdown, src/db/deploy.ts). No-op if there was never one.
+  clearInterrupted(repo, number);
 }
 export function getActive(): ActiveWork[] {
   return [...active.values()].sort((a, b) => a.since - b.since);

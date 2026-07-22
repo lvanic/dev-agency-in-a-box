@@ -51,6 +51,10 @@ export const OPS_SETTINGS = [
   { key: "skip_ci", env: "SKIP_CI", type: "bool", def: true, label: "Append [skip ci] to agency commits" },
   { key: "public_url", env: "PUBLIC_URL", type: "str", def: "", label: "Public base URL (webhook auto-register)" },
   { key: "graceful_shutdown_ms", env: "GRACEFUL_SHUTDOWN_MS", type: "num", def: 570000, label: "Graceful shutdown drain (ms)" },
+  // Deploy-safe runs: hold the agency's own ready-to-merge PR in a queue while other issues are in
+  // flight instead of self-merging immediately (which would autodeploy mid-run). See
+  // src/deploySafety.ts. Off restores the old "merge immediately" behavior.
+  { key: "self_merge_hold", env: "", type: "bool", def: true, label: "Hold self-merges until other runs finish" },
   // Process Analyzer (self-improvement watchdog): on by default (matches the prefilled ANALYZER_API_KEY
   // in docker-compose.yml's zero-config path) — this is an explicit kill-switch, not an opt-in.
   { key: "analyzer_enabled", env: "", type: "bool", def: true, label: "Enable the Process Analyzer" },

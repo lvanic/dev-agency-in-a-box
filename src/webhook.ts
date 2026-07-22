@@ -63,6 +63,8 @@ import { listAgentFiles, readAgentFile, isSafeAgentPath } from "./memory.js";
 import { startApp, stopApp, getApp, pickWebDevScript, isTauriPackage, buildLocalCommand } from "./apprun.js";
 import { ensureRepoAccess } from "./commands.js";
 import { previewUrlFor, runChecksNow } from "./preview.js";
+import { attemptSelfMerge, flushHeldUpdatesNow } from "./deploySafety.js";
+import { listHeldUpdates, clearInterrupted } from "./db/deploy.js";
 import { putAttachment, getAttachment } from "./db/attachments.js";
 import { dispatch } from "./pool.js";
 import { syncInEvent } from "./tracker.js";
@@ -620,6 +622,9 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
               active: getActive(),
               inflight: inFlightKeys(),
               rateLimited: listRateLimited(),
+              // Deploy-safe runs: agency-repo PR(s) held by the self-merge quiet window (see
+              // deploySafety.ts) — drives the dashboard's "Update ready" chip.
+              heldUpdates: listHeldUpdates(),
               issues: enriched,
               runs: recentRuns(40),
               activity: recentActivity(150), // SSE streams live deltas; the poll only needs a recent backlog
@@ -1093,7 +1098,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
     }
 
     // Dashboard actions (auth required), not GitHub webhooks.
-    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/app-run", "/app-stop", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear"].includes(path)) {
+    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/app-run", "/app-stop", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
@@ -1321,7 +1326,11 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
             const e = await mergeEpic(repo, number);
             return e.ok ? ok() : res.writeHead(409).end(JSON.stringify({ error: e.msg }));
           }
-          const r = await mergePrForBranch(repo, `agency/issue-${number}`);
+          // Deploy-safe runs: the agency's OWN repo may hold this instead of merging right now if
+          // other issues are in flight (self-merge quiet window — see deploySafety.ts). It shows up
+          // as an "Update ready" chip; the human deploys now or it flushes once the pool goes quiet.
+          const r = await attemptSelfMerge(cfg, repo, number, `agency/issue-${number}`);
+          if (r.held) return ok(JSON.stringify({ ok: true, held: true }));
           if (r.ok) {
             afterMerge(repo, number, r.files);
             await closeIssue(repo, number, `🚀 Merged ${r.msg} from the dashboard.`).catch(() => {});
@@ -1333,6 +1342,14 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
             return ok();
           }
           return res.writeHead(409).end(JSON.stringify({ error: r.msg }));
+        }
+        if (path === "/deploy-now") {
+          // Dashboard "Update ready" chip → confirm dialog → Deploy now: flush every held self-merge
+          // immediately, even though other issues may still be in flight (the human is deliberately
+          // accepting the interruption — those issues auto-resume after the restart).
+          if (!actor || actor.role !== "admin") return res.writeHead(403).end('{"error":"admin only"}');
+          const merged = await flushHeldUpdatesNow();
+          return ok(JSON.stringify({ ok: true, merged }));
         }
         if (path === "/epic-play") {
           // Epic ▶ Play: work ALL sub-issues in the recorded order — starts the first pending one
@@ -1472,6 +1489,10 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         if (path === "/resume") {
           // Unstick an issue and re-run it, whatever state it's in.
           if (!repo || !number || !resume) return res.writeHead(400).end("{}");
+          // Deploy-safe runs: a human explicitly pressing Resume is a strong enough signal to drop
+          // any stale interrupted-run marker for this issue — they're driving now, not automation
+          // (see runner.ts's autoResumeInterrupted, which deliberately does NOT clear it itself).
+          clearInterrupted(repo, number);
           if (p.hasOwnProperty("model")) {
             if (p.model && typeof p.model === "object" && p.model.providerId && p.model.model) {
               setIssueModelOverride(repo, number, p.model.providerId, p.model.model);

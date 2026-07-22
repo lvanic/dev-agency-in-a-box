@@ -33,7 +33,6 @@ import {
   fetchCheckout,
   mergeBaseInto,
   repoBaseBranch,
-  mergePrForBranch,
   prMerged,
   closeIssue,
   canTrigger,
@@ -137,6 +136,8 @@ import {
   ensureAllRepoAccess,
   recoverOrphans,
 } from "./commands.js";
+import { markInterrupted, listInterrupted, bumpInterruptedAttempts, clearInterrupted } from "./db/deploy.js";
+import { shouldAutoResumeMarker, attemptSelfMerge, flushHeldUpdatesIfQuiet } from "./deploySafety.js";
 
 const MAX_AUTOFIX = 2;
 
@@ -1282,6 +1283,9 @@ function startAutoMode(cfg: Config): void {
   const inFlight = (repo: string, n: number): boolean => inFlightKeys().includes(`${repo}#${n}`);
   const tick = async (): Promise<void> => {
     if (shuttingDown || agentsArePaused() || !githubConfigured(cfg)) return;
+    // Deploy-safe runs: flush any self-merge held while other work was in flight, now that the
+    // pool has gone fully quiet — a no-op most ticks (nothing held, or other work still running).
+    await flushHeldUpdatesIfQuiet().catch((e) => console.error("[agency] held-update flush error:", (e as Error).message));
     for (const repo of effectiveRepos(cfg)) {
       // PRs in flight: merge when ready, otherwise nudge them toward mergeable.
       let prs: Awaited<ReturnType<typeof listAgencyPrs>> = [];
@@ -1300,9 +1304,12 @@ function startAutoMode(cfg: Config): void {
           const verdict = getReview(repo, n)?.verdict;
           const health = await prHealth(repo, pr.number); // ok | pending | failing | conflict
           if (verdict === "approved" && health.status === "ok") resetAutoAttempts(repo, n); // reached a good state
-          // Ready to ship: reviewer approved, no conflicts, checks not failing/pending.
+          // Ready to ship: reviewer approved, no conflicts, checks not failing/pending. For the
+          // agency's OWN repo this may be held instead of merged (self-merge quiet window — see
+          // deploySafety.ts): merging immediately would autodeploy mid-run of other issues.
           if (wantMerge && verdict === "approved" && health.status === "ok") {
-            const r = await mergePrForBranch(repo, pr.branch);
+            const r = await attemptSelfMerge(cfg, repo, n, pr.branch);
+            if (r.held) continue; // queued in held_updates; flushed on quiet or via dashboard "Deploy now"
             if (r.ok) {
               afterMerge(repo, n, r.files);
               await closeIssue(repo, n, `🤖 **Auto-merged** ${r.msg} — review approved, no conflicts, checks green.`).catch(() => {});
@@ -1354,6 +1361,50 @@ function githubConfigured(_cfg: Config): boolean {
   return githubReady();
 }
 
+/**
+ * Deploy-safe runs, phase 2: on boot, auto-resume any issue whose run was cut short by graceful-
+ * shutdown (see gracefulShutdown's interrupted_runs marker) instead of letting recoverOrphans park
+ * it at needs-attention. Capped at one auto-resume attempt per marker — a marker that already shows
+ * a prior attempt (the process crashed again before it could clear itself — a genuine crash loop,
+ * not a normal redeploy) is parked exactly like today instead. Returns the "repo#number" keys it
+ * acted on so recoverOrphans can skip them (it would otherwise see the same working+unblocked row —
+ * now legitimately running again — and re-park it as a false orphan).
+ */
+async function autoResumeInterrupted(cfg: Config): Promise<Set<string>> {
+  const handled = new Set<string>();
+  for (const m of listInterrupted()) {
+    const key = `${m.repo}#${m.number}`;
+    try {
+      if (!shouldAutoResumeMarker(m.attempts)) {
+        // Exhausted: this exact marker already saw one auto-resume attempt without ever clearing
+        // (see below) — a crash loop, not a normal redeploy. Park it and drop the marker; nothing
+        // further to track once it's sitting at needs-attention waiting on a human.
+        recordIssueStatus(m.repo, m.number, setBlocked(withStatus("working"), "needsAttention"));
+        pushActivity(m.repo, m.number, "agency", "done", "⏸ Interrupted again before recovering — parked at needs-attention. Press Resume to retry.");
+        console.log(`[agency] interrupted-run marker exhausted ${key} — parked (crash-loop guard)`);
+        clearInterrupted(m.repo, m.number);
+      } else {
+        // Bump BEFORE dispatching — forceResume's dispatch() only ENQUEUES the actual work, so by
+        // the time this await resolves the resumed run has barely started. The marker is
+        // intentionally NOT cleared here: if another deploy interrupts this same issue again before
+        // its resumed run ever finishes, the row must still read attempts >= 1 next boot so the
+        // crash-loop guard above actually engages — clearing at dispatch time would let it reinsert
+        // at attempts=0 and auto-resume forever. It's cleared once the resumed run genuinely
+        // completes (activity.ts's clearActive, called by every worker when it's done) or a human
+        // manually presses Resume (webhook.ts's /resume handler).
+        bumpInterruptedAttempts(m.repo, m.number);
+        pushActivity(m.repo, m.number, "agency", "text", "▶ auto-resumed after deploy");
+        console.log(`[agency] auto-resuming after deploy: ${key}`);
+        await forceResume(cfg, m.repo, m.number);
+        handled.add(key);
+      }
+    } catch (err) {
+      console.error(`[agency] auto-resume error ${key}:`, (err as Error).message);
+    }
+  }
+  return handled;
+}
+
 /** GitHub-dependent startup work (repo access, orphan recovery, rate-limit reconcile). */
 async function backgroundInit(cfg: Config): Promise<void> {
   if (!githubConfigured(cfg)) {
@@ -1362,7 +1413,10 @@ async function backgroundInit(cfg: Config): Promise<void> {
   }
   try {
     await ensureAllRepoAccess(cfg);
-    await recoverOrphans(cfg);
+    // Deploy-safe runs: auto-resume anything interrupted by a self-deploy BEFORE the generic orphan
+    // sweep runs, so it never gets parked as a false orphan (see autoResumeInterrupted's doc).
+    const resumed = await autoResumeInterrupted(cfg);
+    await recoverOrphans(cfg, resumed);
     await reconcileRateLimited(cfg);
   } catch (e) {
     console.error("[agency] background init error:", (e as Error).message);
@@ -1424,6 +1478,20 @@ async function gracefulShutdown(signal: string): Promise<void> {
   const graceMs = sNum("graceful_shutdown_ms", "GRACEFUL_SHUTDOWN_MS", 570_000); // ~9.5 min
   console.log(`[agency] ${signal}: draining ${running} running + ${queued} queued (grace ${Math.round(graceMs / 1000)}s)…`);
   await Promise.race([drain(), new Promise((r) => setTimeout(r, graceMs))]);
+  // Deploy-safe runs: anything STILL in flight survived the grace window — persist a marker so the
+  // NEXT boot auto-resumes it instead of parking at needs-attention (runner.ts's
+  // autoResumeInterrupted). inFlightKeys() already covers both a running task AND one still sitting
+  // in the pool's queue that never got a chance to start (pool.ts's own doc: "running OR waiting for
+  // a slot") — so this single write covers both cases; no separate queued-item handling is needed.
+  const survivors = inFlightKeys();
+  for (const key of survivors) {
+    const idx = key.indexOf("#");
+    if (idx < 0) continue;
+    const repo = key.slice(0, idx);
+    const number = Number(key.slice(idx + 1));
+    if (repo && Number.isFinite(number)) markInterrupted(repo, number, "deploy");
+  }
+  if (survivors.length) console.log(`[agency] persisted ${survivors.length} interrupted run(s) for auto-resume: ${survivors.join(", ")}`);
   console.log("[agency] drained — exiting cleanly.");
   process.exit(0);
 }

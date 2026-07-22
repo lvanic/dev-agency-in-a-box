@@ -284,6 +284,23 @@ export function getDb(): DatabaseSync | null {
       CREATE INDEX IF NOT EXISTS idx_run_step_ts ON run_step (ts);
       CREATE INDEX IF NOT EXISTS idx_run_step_issue ON run_step (repo, number);
       CREATE INDEX IF NOT EXISTS idx_activity_issue ON activity (repo, number);
+      -- Deploy-safe runs (P: self-merge quiet window + auto-resume after redeploy). A run cut short
+      -- by graceful-shutdown drain gets a marker here so the NEXT boot auto-resumes it instead of
+      -- parking at needs-attention. attempts guards against a crash loop (see runner.ts
+      -- autoResumeInterrupted / gracefulShutdown, src/deploySafety.ts shouldAutoResumeMarker).
+      CREATE TABLE IF NOT EXISTS interrupted_runs (
+        repo TEXT NOT NULL, number INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT 'deploy',
+        attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+        PRIMARY KEY (repo, number)
+      );
+      -- Self-merge quiet window (human-gated hold, see src/deploySafety.ts): an agency-repo PR that
+      -- was ready to merge but held because other issues were still in flight. Flushed by a human
+      -- ("Deploy now" in the dashboard) or automatically once the pool goes quiet.
+      CREATE TABLE IF NOT EXISTS held_updates (
+        repo TEXT NOT NULL, number INTEGER NOT NULL, pr_number INTEGER NOT NULL DEFAULT 0,
+        title TEXT, held_at TEXT NOT NULL,
+        PRIMARY KEY (repo, number)
+      );
     `);
     // Migrations for older databases (ALTER fails harmlessly if the column already exists).
     for (const sql of [

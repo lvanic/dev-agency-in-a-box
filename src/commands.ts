@@ -105,11 +105,16 @@ export async function handleMergeCommands(cfg: Config, repo: string): Promise<vo
  * Re-queue issues stranded "working" by a restart mid-run. On a fresh process no work is
  * active, so any in-progress issue is orphaned — park it so it's picked up again. Makes
  * redeploys safe even while an agent was working.
+ *
+ * `skip` (deploy-safe runs): "repo#number" keys that runner.ts's autoResumeInterrupted already
+ * auto-resumed THIS boot from an interrupted-run marker — without this, this sweep would see the
+ * same working+unblocked row (now legitimately running again) and re-park it as a false orphan.
  */
-export async function recoverOrphans(cfg: Config): Promise<void> {
+export async function recoverOrphans(cfg: Config, skip?: Set<string>): Promise<void> {
   for (const repo of effectiveRepos(cfg)) {
     try {
       for (const i of await listAllOpenIssues(repo)) {
+        if (skip?.has(`${repo}#${i.number}`)) continue;
         const st = getIssueStatus(repo, i.number);
         // Only a genuinely in-flight ("working" with NO blocked reason) issue is an orphan after a
         // restart. An already-parked one (needs-attention / awaiting / rate-limited) must NOT be
