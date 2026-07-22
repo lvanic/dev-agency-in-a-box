@@ -421,13 +421,13 @@ async function processIssue(cfg: Config, repo: string, issue: Issue, opts: { fre
         console.error(`[agency] pipeline error after model switch ${repo} #${issue.number}:`, msg2);
         if (await maybeParkRateLimited(repo, issue.number, err2)) return;
         recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "needsAttention"));
-        await commentOnIssue(repo, issue.number, `❌ Run failed even after model switch: ${msg2.slice(0, 300)} — fix and re-pin.`).catch(() => {});
+        await commentOnIssue(repo, issue.number, `❌ Run failed even after model switch: ${msg2.slice(0, 300)} — press Resume on the dashboard to retry.`).catch(() => {});
       }
       return;
     }
     if (rl) return;
     recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "needsAttention"));
-    await commentOnIssue(repo, issue.number, `❌ Run failed: ${msg.slice(0, 300)} — fix and re-pin.`).catch(() => {});
+    await commentOnIssue(repo, issue.number, `❌ Run failed: ${msg.slice(0, 300)} — press Resume on the dashboard to retry.`).catch(() => {});
   } finally {
     clearActive(repo, issue.number);
     clearIssueModelOverride(repo, issue.number); // one-shot chatbox override: consume it after each run
@@ -476,7 +476,7 @@ async function processHealOne(
     await commentOnPr(
       repo,
       pr.number,
-      `⚠️ Still unhealthy (${health.detail}) after ${MAX_AUTOFIX} auto-fix attempts — needs a human. Comment \`@dev <hint>\` to guide me.`,
+      `⚠️ Still unhealthy (${health.detail}) after ${MAX_AUTOFIX} auto-fix attempts — needs a human. Reply with a hint (here or on the dashboard) to guide me.`,
     );
     incAutofix(repo, pr.number);
     return;

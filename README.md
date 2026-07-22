@@ -1,10 +1,11 @@
 # 🤖 Dev Agency
 
-A fully autonomous team of AI agents you operate entirely through GitHub issues.
-You write an issue and pin a teammate; the agency plans, asks if it must, waits for your 👍,
-builds on a branch, tests, reviews, and hands you a draft PR. You test locally and tap
-**Merge** on the dashboard. It runs 24/7 on Coolify (Docker), reacts instantly to webhooks,
-heals its own PRs, learns from every run, and proposes improvements to its own playbooks as PRs.
+A fully autonomous team of AI agents you operate from one dashboard — app-first, with
+GitHub as the code host and mirror. You file an issue (dashboard **+ New**, or on GitHub);
+the agency routes it to the right agent, plans, asks if it must, waits for your 👍, builds
+on a branch, tests, reviews, and hands you a draft PR. You test locally and tap **Merge**
+on the dashboard. It runs 24/7 on Coolify (Docker), reacts instantly to webhooks, heals its
+own PRs, learns from every run, and folds improvements into its own playbooks.
 
 **Status (v1.2.0):** mobile-first dashboard (installable PWA, light/dark), multi-user login with
 encrypted per-user credentials, a guided onboarding wizard, kanban with auto-resume/auto-merge,
@@ -32,22 +33,19 @@ Dev/prod split and staging: [`DEPLOY.md`](DEPLOY.md).
 
 ### Start work
 
-Write an issue in a watched repo and pin a teammate in the title or body:
+File an issue — dashboard **+ New** (with a route/agent picker and model override), the
+repo's **Orchestrator chat** (describe an idea; it proposes scoped issues you create with
+one click), or plain GitHub. No magic syntax: the **dealer** reads a fresh issue and routes
+it to the right workflow or agent (a one-file fix → the developer solo; a fuzzy idea → the
+planner). You can always re-route from the issue's card.
 
-| Pin | Who answers | What happens |
-| --- | --- | --- |
-| `@dev` / `@agency` | Full pipeline | Planner (Opus) researches & proposes → you approve → Developer builds → Tester runs checks → Reviewer reviews → draft PR |
-| `@plan` | 🧠 Planner only | Research + plan, conversational — refine it by replying, then `@dev` to build |
-| `@arch` | 🏛 Architect | Technical plan, no code |
-| `@review` | 🔍 Reviewer | Reviews the issue's branch/diff |
-| `@test` | 🧪 Tester | Runs the project's checks and reports |
+The full pipeline: Planner researches & proposes → you approve → Developer builds → Tester
+runs checks → Reviewer reviews → draft PR. Small/obvious tasks skip the approval gate
+entirely (`PLAN AUTO`). Every run opens with a `model=… because …` line — the cost-aware
+picker chooses the cheapest capable model per step.
 
-The agency reacts 👀 on your comment within seconds and comments 🏗️ when it picks the
-issue up. Small/obvious tasks skip the approval gate entirely (`PLAN AUTO`).
-
-**When do I need to tag a handle?** Only the **first** time, to start a thread (so the agency
-doesn't jump on every random issue). After that the thread is "owned" — **just comment, no
-tag.** Any later comment re-engages it, even after you've merged and the issue/PR is closed:
+**Conversation just works** — reply anywhere (dashboard inline reply or GitHub), no tags
+needed. Any comment re-engages the thread, even after you've merged and the issue/PR is closed:
 
 - Reply on an **open issue** → it continues / replans with your note.
 - Reply on a **plan** → 👍 (or `ok`) to build, or write the change to refine it.
@@ -64,12 +62,12 @@ tag.** Any later comment re-engages it, even after you've merged and the issue/P
 - **Answer questions**: reply normally; the pipeline resumes on its own.
 - **Merge**: tap **Merge** on the card in the dashboard (Review column) —
   squash-merges the PR, deletes the branch, closes the issue.
-- **Retrigger an issue**: remove its `agency:*` label — it's picked up again instantly.
-- **Mute an issue**: add the `agency:ignore` label.
+- **Retrigger / resume an issue**: press **Resume** on its card.
+- **Mute an issue**: toggle **Ignore** on its card.
 
 ### Work with PRs
 
-- **Request changes**: comment `@dev <what to change>` (or `@fix`) on the PR itself.
+- **Request changes**: just comment what to change — on the card's reply box or on the PR itself.
 - **Self-healing**: failing CI or merge conflicts are fixed automatically (max 2 attempts,
   then it asks you for a hint).
 - **Test locally**: `./scripts/checkout-issue.sh <owner/repo> <issue-number>`
@@ -83,27 +81,11 @@ Settings → Repos:
 - **Add repo** — start watching a repo by `owner/name` (bot is auto-invited, webhook auto-registered)
 - The watched-repos list is right there — no separate "list" step needed
 
-### About the `@dev` / `@plan` autocomplete
+### Labels (optional mirror)
 
-GitHub only autocompletes **real accounts and teams** in the `@` box — `@dev`/`@plan` are
-plain text the agency parses, so they can't appear there, and that's by design (no extra
-collaborators or accounts needed). Two ways to make this painless:
-
-- **You rarely type them anyway** — only the first comment on a thread needs a handle.
-  Everything after is just a plain reply (see above).
-- **For the first comment**, `@dev` etc. are 4–5 characters; or mention the **bot account**
-  (`@your-bot`), which *does* autocomplete once it has commented in the repo, and put the
-  role word in the text (e.g. "@your-bot please plan this").
-
-If you want true autocomplete for each role, the only real options are GitHub **org Teams**
-(`@org/dev` in org repos) or dedicated bot accounts per role — both heavier than they're
-worth given follow-ups need no tag.
-
-### Labels = state machine
-
-`agency:in-progress` → working · `agency:awaiting-answer` / `agency:awaiting-approval` →
-waiting on you · `agency:ready` → PR is up · `agency:needs-attention` + 🚧 → blocked, read
-the last comment · `agency:ignore` → muted · `agency:unlimited` → exempt from budgets.
+The dashboard is the source of truth for issue state. If you like seeing state on GitHub,
+turn on the outbound `agency:*` label mirror in Settings — it's write-only and **off by
+default**; the agency never reads labels back (see `docs/adr/0001`).
 
 ### Dashboard (mobile-first)
 
@@ -124,21 +106,23 @@ open a detail drawer with:
 
 ## How it stays good and cheap
 
-**Models** — cheapest that can do the job: Planner = Opus 4.8, Architect/Developer/Reviewer
-= Sonnet, Tester/Librarian = Haiku. Override per role (`PLANNER_MODEL`, …) or all at once
-(`AGENT_MODEL`).
+**Models** — cheapest capable, chosen at run time: each role resolves to a capability tier,
+then the cheapest priced model in that tier (prices editable in Settings → Models; your
+explicit per-role or per-issue picks always win). The choice and its reason are the first
+line of every run; revise loops escalate to a stronger model after repeated failures and
+downshift for trivial fix-ups.
 
 **Cost guardrails** — every run's cost + turns land in the ledger. Per-issue budget
-(default $15 / 800 turns across all runs) parks runaways as `agency:needs-attention`
-instead of burning more; per-run `maxTurns` stops loops. Label an issue `agency:unlimited`
-to exempt it. Tune with `MAX_ISSUE_COST_USD`, `MAX_ISSUE_TURNS`, `MAX_TURNS_PER_RUN`.
+(default $15 / 800 turns across all runs) parks runaways at needs-attention instead of
+burning more; per-run `maxTurns` stops loops. Flag an issue **Unlimited** on its card to
+exempt it. Budgets are tuned in Settings → Operations.
 
-**Self-evolving loop** — after each finished build a 📚 Librarian (Haiku) distills 0–3
-non-obvious lessons ("repo X needs pnpm", "tests want DATABASE_URL") into memory; recent
-lessons ride along in every agent's prompt immediately. Once ~8 pile up, the agency opens a
-**draft PR against this repo** folding them into the playbooks — you review and merge, Coolify
-redeploys, the agency is permanently smarter. Rule changes never happen silently.
-Disable with `SELF_IMPROVE=false`.
+**Self-evolving loop** — after each finished build a 📚 Librarian distills 0–3 non-obvious
+lessons ("repo X needs pnpm", "tests want DATABASE_URL"); same-repo lessons ride along in
+every agent's prompt immediately. Once enough pile up, they're folded live into the shared
+and per-role **Learned** docs — versioned, browsable, and editable in **Settings → Memory**
+(revert any revision). Optionally, generic learnings can also be proposed upstream to the
+original project as draft PRs (Settings → General → Contribute upstream, off by default).
 
 **Engineering harness** — every agent is bound by `memory/central/`: the CONSTITUTION plus
 playbooks (atomic design, separation of concerns, KISS, reuse-before-create, central theme,
@@ -158,7 +142,7 @@ The short version:
    `agency-data` volume. (Everything that used to be env — GitHub/Claude tokens, owner, repos,
    run mode, budgets — is now set in-app via the onboarding wizard and Settings → Operations.)
 3. Open the dashboard → create the admin account → run onboarding to add your tokens + first repo,
-   then pin `@dev` on an issue. That's it.
+   then file your first issue (**+ New**). That's it.
 
 **Optional env overrides** (none required): `MASTER_KEY` (pin instead of auto-gen — keep it
 stable), `RUN_MODE` (`watch`/`webhook`/`once`), `AGENCY_ENV=development` (DEV badge),
@@ -181,7 +165,7 @@ src/
 ├── runner.ts      scan GitHub -> dispatch to a bounded worker pool (AGENCY_CONCURRENCY=3)
 ├── pipeline.ts    plan -> approve -> build -> test -> review -> PR (+ reflection)
 ├── agents/        roles (model + tools + persona), the Agent SDK runner
-├── reflect.ts     librarian lessons + self-improvement PRs
+├── reflect.ts     librarian lessons + live playbook folding (+ optional upstream PRs)
 ├── budget.ts      cost guardrails
 ├── github.ts      gh CLI wrappers, labels, reactions, webhooks, collaborator invites
 ├── commands.ts    repo watch-list + access provisioning, orphan recovery

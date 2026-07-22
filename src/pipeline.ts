@@ -1104,7 +1104,7 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
   const changed = (await localHeadSha(workdir)) !== beforeSha || (await workdirDirty(workdir));
   if (!changed) {
     recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "needsAttention"));
-    await say(repo, issue.number, "developer", `**No code changes were produced** addressing the review, so I skipped the re-test/re-review to avoid burning tokens. Comment guidance and re-pin, or **Merge anyway**.`);
+    await say(repo, issue.number, "developer", `**No code changes were produced** addressing the review, so I skipped the re-test/re-review to avoid burning tokens. Reply with guidance to retry, or **Merge anyway** on the dashboard.`);
     return;
   }
 
