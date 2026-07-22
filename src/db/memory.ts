@@ -25,11 +25,14 @@ export function searchMemory(query: string, opts: { repo?: string; limit?: numbe
     return [];
   }
   const scored = rows
+    // Per-repo private: plans, lessons, reviews and issues are project-private artifacts —
+    // never surface one repo's issue history in another repo's recall (no cross-repo bleed).
+    // Shared knowledge/preferences belong in a separate central vault, not here.
+    .filter((r) => !repo || r.repo === repo)
     .map((r) => {
       const t = r.text.toLowerCase();
       let s = 0;
       for (const term of terms) if (t.includes(term)) s++;
-      if (repo && r.repo === repo) s += 0.5; // prefer this repo's memory
       return { r, s };
     })
     .filter((x) => x.s > 0);
