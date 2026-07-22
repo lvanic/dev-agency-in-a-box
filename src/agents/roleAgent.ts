@@ -13,7 +13,8 @@ import { join as pathJoin } from "node:path";
 import { ROLES, modelFor, canonicalModel, roleTier, type RoleName } from "./roles.js";
 import { tierModel, getIssueProvider, getIssueAgentModels, parseModelRef, fallbackFor, getIssueUseFallback, type Tier, type Provider } from "../db/providers.js";
 import { resolveTierModel, priceFor } from "./pricing.js";
-import { loadConstitution, loadPersona, loadPlaybooks, loadLearned } from "../memory.js";
+import { loadConstitution, loadPersona, loadPlaybooks } from "../memory.js";
+import { vaultSlice } from "../vault.js";
 import { pushActivity, getActive, pushRunMsg } from "../activity.js";
 import { recentLessons, recordTokens, recordRunStep, getProviders, getRoleModels, getSessionFallback, setSession, getIssueModelOverride, getGlobalModel, addIssueFiles, getFallbackChain, setRateLimited, isProviderRateLimited, appendRunMsg, renderBadge } from "../store.js";
 import { parseRateLimit, RateLimitedError } from "../ratelimit.js";
@@ -263,16 +264,18 @@ export interface RoleRunResult {
 
 async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: string): Promise<string> {
   const def = ROLES[role];
-  const [persona0, constitution, playbooks, learned] = await Promise.all([
+  const [persona0, constitution, playbooks] = await Promise.all([
     loadPersona(def.personaFile),
     loadConstitution(),
     loadPlaybooks(def.playbooks),
-    loadLearned(def.personaFile),
   ]);
   const persona = (customPersona && customPersona.trim()) ? customPersona : persona0;
   // Keep the self-improving parts bounded so the (cache-written) system prompt stays small.
   const lessons = recentLessons(8, repo);
-  const learnedCapped = learned.length > 3500 ? learned.slice(0, 3500) + "\n…(truncated)" : learned;
+  // Central Vault (docs/central-vault-plan.md): durable shared knowledge as compact canonical records,
+  // budget-capped. REPLACES the old learned-doc injection — the vault is seeded from those docs by the
+  // one-off boot migration (migrateLearnedToVault), so this leaves no gap. Best-effort: "" on any error.
+  const vault = vaultSlice(repo, role);
   return [
     "=== OUTPUT STYLE (strict) ===",
     "Be maximally terse — spend the fewest tokens that fully do the job. No preamble, no",
@@ -289,8 +292,8 @@ async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: 
     "",
     "=== PLAYBOOKS (how we build — binding) ===",
     playbooks,
-    ...(learnedCapped.trim()
-      ? ["", "=== LEARNED (self-improving notes — the agency's evolving experience; apply them) ===", learnedCapped]
+    ...(vault.trim()
+      ? ["", "=== VAULT (durable shared knowledge — the agency's evolving experience; apply them) ===", vault]
       : []),
     ...(lessons.length
       ? ["", "=== RECENT LESSONS (newest takeaways — apply them) ===", ...lessons.map((l) => `- ${l}`)]

@@ -1,6 +1,7 @@
 import { getDb, now } from "./connection.js";
+import { listVault } from "./vault.js";
 
-export interface MemoryHit { kind: "lesson" | "plan" | "review" | "issue"; repo: string; number: number; text: string; at: string }
+export interface MemoryHit { kind: "lesson" | "plan" | "review" | "issue" | "vault"; repo: string; number: number; text: string; at: string }
 
 
 export function searchMemory(query: string, opts: { repo?: string; limit?: number } = {}): MemoryHit[] {
@@ -10,6 +11,10 @@ export function searchMemory(query: string, opts: { repo?: string; limit?: numbe
   const limit = opts.limit ?? 8;
   const terms = String(query || "").toLowerCase().split(/[^a-z0-9_]+/).filter((t) => t.length > 2).slice(0, 8);
   if (!terms.length) return [];
+  // Unscoped recall routes to the Central Vault: the per-repo hard filter below deliberately reserves
+  // the no-repo slot for shared, cross-repo knowledge, which now lives in the vault (not these private
+  // artifact tables). Repo-scoped recall is unchanged — it never bleeds one repo's history into another.
+  if (!repo) return searchVault(terms, limit);
   const rows: MemoryHit[] = [];
   try {
     const grab = (kind: MemoryHit["kind"], sql: string) => {
@@ -38,4 +43,24 @@ export function searchMemory(query: string, opts: { repo?: string; limit?: numbe
     .filter((x) => x.s > 0);
   scored.sort((a, b) => b.s - a.s || (new Date(b.r.at || 0).getTime() - new Date(a.r.at || 0).getTime()));
   return scored.slice(0, limit).map((x) => ({ ...x.r, text: x.r.text.slice(0, 800) }));
+}
+
+/** Term-match the vault's canonical content for unscoped recall — weight then term-overlap ranked. */
+function searchVault(terms: string[], limit: number): MemoryHit[] {
+  const scored = listVault()
+    .map((row) => {
+      const t = row.entry.c.toLowerCase();
+      let s = 0;
+      for (const term of terms) if (t.includes(term)) s++;
+      return { row, s };
+    })
+    .filter((x) => x.s > 0);
+  scored.sort((a, b) => b.row.entry.w - a.row.entry.w || b.s - a.s);
+  return scored.slice(0, limit).map((x) => ({
+    kind: "vault" as const,
+    repo: x.row.entry.s,
+    number: 0,
+    text: x.row.entry.c,
+    at: x.row.updated_ts,
+  }));
 }

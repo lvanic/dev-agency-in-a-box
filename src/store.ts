@@ -46,6 +46,18 @@ export { searchMemory } from "./db/memory.js";
 export type { MemoryHit } from "./db/memory.js";
 export { getAgentOverride, getAgentDefault, setAgentOverride, listAgentRevisions, getAgentRevision, deleteAgentOverride, listAgentOverridePaths } from "./db/agent_overrides.js";
 export type { AgentRevision } from "./db/agent_overrides.js";
+export {
+  encodeVaultEntry,
+  decodeVaultEntry,
+  upsertVaultEntry,
+  getVaultEntry,
+  listVault,
+  deleteVaultEntry,
+  listVaultRevisions,
+  scopeMatches,
+  contentHasArtifactRef,
+} from "./db/vault.js";
+export type { VaultEntry, VaultInput, VaultRow, VaultKind, VaultSource, VaultRevision } from "./db/vault.js";
 export { addWatchedRepo, removeWatchedRepo, listWatchedRepos } from "./db/watched.js";
 // Re-export the users aggregate (Candidate 3, #70).
 export {

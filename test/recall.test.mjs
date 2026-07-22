@@ -14,21 +14,22 @@ test("searchMemory: empty query / no data → []", () => {
   assert.deepEqual(s.searchMemory("anything"), []);
 });
 
-test("searchMemory: finds and ranks across lessons, plans, reviews, issues", () => {
+test("searchMemory: finds and ranks across lessons, plans, reviews, issues (repo-scoped)", () => {
   s.recordLesson("acme/app", 1, "Resolve merge conflicts by merging origin/main, never rebasing the shared branch.");
   s.recordPlan("acme/app", 2, "Plan: add rate limit handling with exponential backoff to the API client.");
   s.recordReview("acme/app", 3, "approved", "Rate limit retry looks correct; backoff capped at 30s.");
   s.recordIssueState("acme/app", 4, { title: "Fix flaky rate limit test", state: "planned" });
 
-  const hits = s.searchMemory("rate limit");
+  // Artifacts are repo-PRIVATE — reachable only on the scoped path (unscoped now routes to the vault).
+  const hits = s.searchMemory("rate limit", { repo: "acme/app" });
   assert.ok(hits.length >= 2, "matches multiple sources");
   assert.ok(hits.every((h) => h.text.toLowerCase().includes("rate limit") || h.text.toLowerCase().includes("rate")), "hits are relevant");
   assert.ok(hits.some((h) => h.kind === "plan"), "includes the plan");
 
-  const conflict = s.searchMemory("merge conflict");
+  const conflict = s.searchMemory("merge conflict", { repo: "acme/app" });
   assert.ok(conflict.some((h) => h.kind === "lesson"), "finds the conflict lesson");
 
-  assert.deepEqual(s.searchMemory("zzz-nonexistent-term"), [], "no false matches");
+  assert.deepEqual(s.searchMemory("zzz-nonexistent-term", { repo: "acme/app" }), [], "no false matches");
 });
 
 test("searchMemory: repo scope is private — no cross-repo bleed", () => {
@@ -43,14 +44,16 @@ test("searchMemory: repo scope is private — no cross-repo bleed", () => {
   const own = s.searchMemory("provider seam ICD-10", { repo: "acme/reimedy" });
   assert.ok(own.some((h) => h.repo === "acme/reimedy" && h.number === 86), "own repo memory is reachable");
 
-  // No repo → unscoped (central-vault style) still returns across repos.
+  // No repo → unscoped routes to the Central Vault, NOT the repo-private artifact tables — so a
+  // repo's plans/lessons never surface unscoped (they were the cross-repo bleed the filter closed).
   const all = s.searchMemory("provider seam ICD-10");
-  assert.ok(all.some((h) => h.repo === "acme/reimedy"), "unscoped search is unrestricted");
+  assert.ok(!all.some((h) => h.repo === "acme/reimedy"), "unscoped no longer leaks artifacts — it hits the vault");
+  assert.ok(all.every((h) => h.kind === "vault"), "unscoped hits are vault entries only");
 });
 
 test("searchMemory: respects limit and truncates long text", () => {
   for (let i = 10; i < 30; i++) s.recordLesson("acme/app", i, "caching strategy note number " + i);
-  const hits = s.searchMemory("caching", { limit: 5 });
+  const hits = s.searchMemory("caching", { repo: "acme/app", limit: 5 });
   assert.equal(hits.length, 5, "limit honored");
   assert.ok(hits[0].text.length <= 800, "text capped");
 });

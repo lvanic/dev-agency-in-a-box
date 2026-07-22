@@ -224,6 +224,17 @@ export function getDb(): DatabaseSync | null {
       -- overridden (before the override gets mirrored onto disk and overwrites it there). Lets
       -- "revert to default" restore what actually shipped instead of the last edit.
       CREATE TABLE IF NOT EXISTS agent_defaults (path TEXT PRIMARY KEY, content TEXT, captured_at TEXT);
+      -- Central Vault (docs/central-vault-plan.md): the ONE durable, machine-canonical store of shared
+      -- cross-run/cross-repo knowledge (prefs, env facts, craft knowledge, glossary). The entry column
+      -- is the canonical single-line JSON record (src/db/vault.ts); source is human|librarian|migration.
+      -- Fills the unscoped-recall slot the per-repo searchMemory filter reserved; issue artifacts never
+      -- enter here (write-time guard). vault_revisions appends every write, same pattern as agent_revisions.
+      CREATE TABLE IF NOT EXISTS vault (key TEXT PRIMARY KEY, entry TEXT NOT NULL, source TEXT, updated_ts TEXT);
+      CREATE TABLE IF NOT EXISTS vault_revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL, entry TEXT NOT NULL, source TEXT, ts TEXT
+      );
+      CREATE INDEX IF NOT EXISTS vault_revisions_key ON vault_revisions (key, id);
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL, email TEXT, password_hash TEXT NOT NULL,
