@@ -78,6 +78,10 @@ function GeneralSection({ data, reload, admin }) {
   const [newDefault, setNewDefault] = useState(cfg.newIssueDefault || "@dev");
   const [analyzerOn, setAnalyzerOn] = useState(ops.analyzer_enabled != null ? !!ops.analyzer_enabled : true);
   const [analyzerRepo, setAnalyzerRepo] = useState(ops.analyzer_repo || "");
+  const [keyRevealed, setKeyRevealed] = useState(false);
+  const analyzerKey = (data.analyzer && data.analyzer.keyForAdmin) || "";
+  const [upstreamOn, setUpstreamOn] = useState(ops.upstream_contrib_enabled != null ? !!ops.upstream_contrib_enabled : false);
+  const [upstreamRepo, setUpstreamRepo] = useState(ops.upstream_repo != null ? ops.upstream_repo : "ArneNostitz/dev-agency");
   const put = (body) => api("/settings", body).then(saved).then(reload).catch(failed);
   return html`<div>
     <div class="sec">Appearance</div>
@@ -99,7 +103,20 @@ function GeneralSection({ data, reload, admin }) {
       <label style="margin-top:10px">Analyzer issues → repo</label>
       <div class="muted" style="font-size:12px;margin-bottom:4px">Where its advisory issues get created. Blank = this agency's own repo (its default target — these are reports on ITS operational health, not any one watched product repo).</div>
       <input placeholder="owner/repo (blank = agency's own repo)" value=${analyzerRepo} onInput=${(e) => { setAnalyzerRepo(e.target.value); later(() => put({ ops: { analyzer_repo: e.target.value.trim() } })); }}/>
-      <div class="muted" style="font-size:12px;margin-top:6px">Model: the Analyzer role uses your global/Claude default until you configure per-role models — same as every other agent here.</div>` : null}
+      <div class="muted" style="font-size:12px;margin-top:6px">Model: the Analyzer role uses your global/Claude default until you configure per-role models — same as every other agent here.</div>
+      <label style="margin-top:14px">Analyzer API key</label>
+      <div class="muted" style="font-size:12px;margin-bottom:4px">Auto-generated and persisted on first boot (same idea as the server's master key) — no secret ships checked into the repo anymore. Copy it into a standalone or vendored analyzer sidecar's own <code>ANALYZER_API_KEY</code>/<code>AGENCY_API_KEY</code> env var if you run one.</div>
+      <div class="cmdbox"><code>${analyzerKey ? (keyRevealed ? analyzerKey : "•".repeat(24)) : "…"}</code>
+        <button class="btn" disabled=${!analyzerKey} onClick=${() => setKeyRevealed((v) => !v)}>${keyRevealed ? "Hide" : "Reveal"}</button>
+        <button class="btn" disabled=${!analyzerKey} onClick=${() => { if (navigator.clipboard) navigator.clipboard.writeText(analyzerKey); toast("Copied"); }}>Copy</button>
+      </div>
+
+      <div class="sec" style="margin-top:18px">Contribute upstream</div>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">Controlled, opt-in channel: when a self-improvement fold or Process Analyzer advisory looks GENERIC (it doesn't name any of this instance's own watched repos), also propose it to the upstream project below as a <code>[from fork]</code> draft PR/issue — always draft, never auto-merged. Instance-specific findings keep the behavior above only.</div>
+      <label class="ckline"><input type="checkbox" checked=${upstreamOn} onChange=${(e) => { setUpstreamOn(e.target.checked); put({ ops: { upstream_contrib_enabled: e.target.checked } }); }}/> Contribute generic improvements upstream</label>
+      <label style="margin-top:10px">Upstream repo</label>
+      <div class="muted" style="font-size:12px;margin-bottom:4px">Blank disables the channel even with the toggle on.</div>
+      <input placeholder="owner/repo (blank = disabled)" value=${upstreamRepo} onInput=${(e) => { setUpstreamRepo(e.target.value); later(() => put({ ops: { upstream_repo: e.target.value.trim() } })); }}/>` : null}
   </div>`;
 }
 

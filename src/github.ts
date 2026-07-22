@@ -6,9 +6,9 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { writeFileSync, unlinkSync, appendFileSync, existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { sBool, sStr } from "./settings.js";
 import { ghBotToken, ghUserToken } from "./creds.js";
 import { recordOutgoingComment, setCommentGhId, getConversation, recordIncident, getSetting } from "./store.js";
@@ -1118,6 +1118,115 @@ export async function ensureDraftPr(repo: string, issue: number, branch: string,
     "--title", title || `Work for #${issue}`, "--body", `Closes #${issue}`,
   ]).catch(() => {});
   return findPrForBranch(repo, branch);
+}
+
+/** Parse `gh api repos/<repo> -q .permissions.push`'s raw stdout into a boolean. Exported for tests. */
+export function parsePushPermission(raw: string): boolean {
+  return (raw || "").trim().toLowerCase() === "true";
+}
+
+/**
+ * Pure routing decision, separated from the actual `gh api` permission check so it's unit-testable
+ * without a network call: direct-push is the fast path ONLY when we actually have push access on
+ * the upstream repo (true for the agency's own repo, or a repo the bot happens to collaborate on);
+ * a typical fork's bot token has none there, so the fork-based flow is the realistic default.
+ * Exported for tests.
+ */
+export function chooseContribRoute(hasDirectPushAccess: boolean): "direct" | "fork" {
+  return hasDirectPushAccess ? "direct" : "fork";
+}
+
+/** Whether the bot's token can push straight to `repo` (checked, not assumed). */
+async function hasDirectPushAccess(repo: string): Promise<boolean> {
+  try {
+    const out = await gh(["api", `repos/${repo}`, "-q", ".permissions.push"]);
+    return parsePushPermission(out);
+  } catch {
+    return false; // couldn't even read permissions → definitely can't push directly
+  }
+}
+
+/**
+ * Idempotently fork `upstreamRepo` into the bot's own account and bring the fork's default branch
+ * in sync with upstream (best-effort — an out-of-date fork would otherwise base the new branch off
+ * stale content). Returns the fork owner's login, or null if forking failed (no write access
+ * anywhere, rate-limited, etc.) — the caller aborts the whole contribution in that case.
+ */
+async function ensureFork(upstreamRepo: string): Promise<string | null> {
+  try {
+    const login = (await gh(["api", "user", "-q", ".login"])).trim();
+    if (!login) return null;
+    // `gh repo fork --clone=false` is idempotent: no-ops (non-fatal exit) if the fork already exists.
+    await gh(["repo", "fork", upstreamRepo, "--clone=false"]).catch(() => {});
+    const forkName = `${login}/${upstreamRepo.split("/").pop()}`;
+    // Best-effort: an existing fork can be behind upstream (it isn't kept in sync automatically),
+    // which would base the new branch off a stale tree. Ignore failure — worst case the PR still
+    // opens, just potentially against an older base.
+    await gh(["repo", "sync", forkName, "--source", upstreamRepo]).catch(() => {});
+    return login;
+  } catch (err) {
+    console.warn(`[agency] couldn't fork ${upstreamRepo} for the upstream contribution:`, (err as Error).message);
+    return null;
+  }
+}
+
+/**
+ * Propose a small, ADDITIVE markdown file to a DIFFERENT (upstream) repo via a draft PR — the
+ * controlled upstream-contribution channel (P5, docs/prime-time-plan.md; see src/upstream.ts for
+ * the enable/genericity gating that decides whether to call this at all). Deliberately never
+ * touches any existing upstream file (a brand-new path under `filePath`) so it can never conflict
+ * with or clobber the target repo's own content, and always opens the PR as a **draft** — a human
+ * reviews and merges it by hand, same as every other agency-opened PR.
+ *
+ * Routing (see `chooseContribRoute`): pushes straight to `upstreamRepo` ONLY when a cheap
+ * permission check confirms the bot's token can actually push there (e.g. the agency's own repo, or
+ * one it collaborates on). The realistic case — a fork proposing to the canonical upstream project —
+ * has no such access, so it forks the repo into the bot's own account (idempotent), pushes the
+ * branch there instead, and opens the PR with `--head <fork-owner>:<branch>`.
+ *
+ * Best-effort throughout: clones to a throwaway temp dir and swallows every error so a failed
+ * upstream contribution never affects the caller's own (already-succeeded) local flow.
+ */
+export async function openUpstreamContribPr(
+  upstreamRepo: string,
+  opts: { filePath: string; content: string; title: string; body: string; branchPrefix: string },
+): Promise<{ url: string } | null> {
+  const dest = join(tmpdir(), `agency-upstream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  try {
+    const route = chooseContribRoute(await hasDirectPushAccess(upstreamRepo));
+    let pushRepo = upstreamRepo;
+    let forkOwner: string | null = null;
+    if (route === "fork") {
+      forkOwner = await ensureFork(upstreamRepo);
+      if (!forkOwner) return null; // no write access anywhere — nothing safe to do
+      pushRepo = `${forkOwner}/${upstreamRepo.split("/").pop()}`;
+    }
+    await cloneRepo(pushRepo, dest);
+    const branch = `${opts.branchPrefix}-${Date.now()}`;
+    await runGit(dest, ["checkout", "-b", branch]);
+    const target = join(dest, opts.filePath);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, opts.content, "utf8");
+    await runGit(dest, ["add", "--", opts.filePath]);
+    await runGit(dest, [
+      "-c", "user.email=agency@users.noreply.github.com",
+      "-c", "user.name=dev-agency",
+      "commit", "-m", opts.title,
+    ]);
+    await runGit(dest, ["push", "-u", "origin", branch]);
+    const base = await repoBaseBranch(upstreamRepo);
+    const head = forkOwner ? `${forkOwner}:${branch}` : branch;
+    await gh([
+      "pr", "create", "--repo", upstreamRepo, "--draft", "--base", base, "--head", head,
+      "--title", opts.title, "--body", opts.body,
+    ]);
+    return await findPrForBranch(upstreamRepo, head);
+  } catch (err) {
+    console.warn(`[agency] upstream contribution PR to ${upstreamRepo} skipped:`, (err as Error).message);
+    return null;
+  } finally {
+    await rm(dest, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /** Find an open PR whose head branch matches `branch`, if any. */

@@ -26,6 +26,7 @@ import {
 import { setActive, clearActive } from "./activity.js";
 import { dispatch } from "./pool.js";
 import { sNum } from "./settings.js";
+import { maybeContributeLearnedUpstream } from "./upstream.js";
 
 /** Parse the librarian's reply: "LESSONS:\n- ..." or "NOTHING". Exported for tests. */
 export function parseLessons(text: string): string[] {
@@ -146,6 +147,14 @@ async function selfImprove(cfg: Config, lessons: LessonRow[]): Promise<void> {
       // Live + versioned: applies on the next agent run, history kept in agent_revisions.
       setAgentOverride(SHARED_LEARNED_PATH, content, "self-improve", `folded ${lessons.length} lessons`);
       console.log(`[agency] self-improvement: Learned doc updated (+${lessons.length} lessons, live)`);
+      // Controlled upstream-contribution channel (P5): offer the same fold to the upstream project
+      // too, IF it's generic and the channel is on — gated entirely inside this call (no-op
+      // otherwise). Never blocks or affects the local apply above, which has already happened.
+      void maybeContributeLearnedUpstream(cfg, {
+        label: "Learned (shared)",
+        content,
+        sourceLessons: lessons.map((l) => l.lesson),
+      });
 
       // Per-role fold: lessons the librarian tagged with a specific role ALSO fold into that
       // role's own learned doc (central/agents/<role>.learned.md). This is what makes the
@@ -184,6 +193,11 @@ async function selfImprove(cfg: Config, lessons: LessonRow[]): Promise<void> {
           if (roleContent) {
             setAgentOverride(path, roleContent, "self-improve", `folded ${roleLessons.length} ${role} lesson(s)`);
             console.log(`[agency] self-improvement: ${role}.learned.md updated (+${roleLessons.length} lessons, live)`);
+            void maybeContributeLearnedUpstream(cfg, {
+              label: `${role}.learned`,
+              content: roleContent,
+              sourceLessons: roleLessons.map((l) => l.lesson),
+            });
           } else {
             console.warn(`[agency] self-improvement: ${role} fold produced no content — its lessons stay queued.`);
             for (const l of roleLessons) failedRoleLessonIds.add(l.id);

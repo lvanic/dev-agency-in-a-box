@@ -55,6 +55,14 @@ export const OPS_SETTINGS = [
   // in docker-compose.yml's zero-config path) — this is an explicit kill-switch, not an opt-in.
   { key: "analyzer_enabled", env: "", type: "bool", def: true, label: "Enable the Process Analyzer" },
   { key: "analyzer_repo", env: "ANALYZER_REPO", type: "str", def: "", label: "Analyzer issues → repo (blank = agency's own repo)" },
+  // Controlled upstream-contribution channel (P5, docs/prime-time-plan.md): opt-in (the bool
+  // defaults OFF) so a fork never contributes upstream by surprise. `upstream_repo` defaults to the
+  // canonical project so a fresh fork can turn the toggle on with zero typing, but clearing the
+  // field to "" explicitly disables the channel even though that's a non-empty default — see
+  // `upstreamTarget()` in src/upstream.ts, which reads the raw setting (not this sStr default) so it
+  // can tell "never touched" from "deliberately cleared".
+  { key: "upstream_contrib_enabled", env: "UPSTREAM_CONTRIB_ENABLED", type: "bool", def: false, label: "Contribute generic improvements upstream" },
+  { key: "upstream_repo", env: "UPSTREAM_REPO", type: "str", def: "ArneNostitz/dev-agency", label: "Upstream repo (blank = disabled)" },
 ] as const;
 
 /** Read every ops setting's effective value (for the dashboard to render the form). */

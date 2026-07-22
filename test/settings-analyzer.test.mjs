@@ -1,7 +1,8 @@
-// Process Analyzer settings (Settings → General): an explicit enable/disable toggle (defaults ON,
-// matching docker-compose.yml's prefilled ANALYZER_API_KEY — a real kill-switch, not an opt-in) and
-// a target-repo override, both wired through the generic OPS_SETTINGS/opsSettingsValues plumbing so
-// the dashboard's auto-save "ops: {...}" path picks them up with no new endpoint code.
+// Process Analyzer settings (Settings → General): an explicit enable/disable toggle (defaults ON —
+// a real kill-switch, not an opt-in, independent of ANALYZER_API_KEY which is now auto-generated;
+// see src/analyzerKey.ts) and a target-repo override, both wired through the generic
+// OPS_SETTINGS/opsSettingsValues plumbing so the dashboard's auto-save "ops: {...}" path picks them
+// up with no new endpoint code.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";

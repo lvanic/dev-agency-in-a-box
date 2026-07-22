@@ -30,7 +30,10 @@ agency deploy breaks — which is exactly when you need it to report the breakag
   string — every issue is distinct in the list) with detailed skill / hook / deterministic-code
   proposals. It carries no DB status and no GitHub label — it surfaces in the agency's Inbox like any
   other untriaged issue, and the dashboard flags it as an Analyzer proposal in its own filter. It
-  **never** writes to the agency and **never** auto-merges.
+  **never** writes to the agency and **never** auto-merges. If the agency's controlled
+  upstream-contribution channel is on (Settings → General → "Contribute upstream") and the advisory
+  is judged generic (doesn't name any of the agency's own watched repos), the agency also mirrors it
+  upstream as a `[from fork]`-prefixed issue — still advisory only.
 - **Verifies the agency deployment** is up (`GET {AGENCY_URL}/web/version.json`) and reports it on
   its health endpoint.
 - Supports a **manual trigger**: `POST /run` (`Authorization: Bearer {AGENCY_API_KEY}`) forces a pass
@@ -56,10 +59,19 @@ No frontend, no webhook server, no pipeline, no DB access, no access to the agen
 
 The root `docker-compose.yml`'s `analyzer` service builds from this directory and talks to the
 `agency` service over the compose network (`AGENCY_URL=http://agency:3000` — no public URL or TLS
-needed for that hop). `ANALYZER_API_KEY` ships prefilled in the compose file (a real generated
-default — see the comment there); both services read the same value (the agency as
-`ANALYZER_API_KEY`; the analyzer as `AGENCY_API_KEY`). **Before it can produce reports**, assign a
-model to the "Analyzer" role in the agency's Settings → Models — that's the only setup step left.
+needed for that hop). `ANALYZER_API_KEY` no longer ships prefilled in the compose file — the agency
+**auto-generates and persists** a strong key on first boot if you leave it unset (same pattern as
+`MASTER_KEY`; see `src/analyzerKey.ts` in the agency repo). This sidecar is a separate container with
+no shared database, so it can't see that generated value by itself:
+
+- **Easiest:** open the agency's **Settings → General → Process Analyzer**, reveal the generated
+  key, and set it as `ANALYZER_API_KEY` in your `.env` (both services read the same env var — the
+  agency as `ANALYZER_API_KEY`, this sidecar as `AGENCY_API_KEY`) — then restart both.
+- Or set your own `ANALYZER_API_KEY` (`openssl rand -hex 32`) in `.env` *before* first boot so the
+  agency never needs to generate one.
+
+**Before it can produce reports**, also assign a model to the "Analyzer" role in the agency's
+Settings → Models — that's the only other setup step.
 
 ## Deploy — standalone (its own repo, independent lifecycle)
 

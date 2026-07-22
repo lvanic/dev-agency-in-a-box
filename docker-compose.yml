@@ -18,11 +18,14 @@
 # (same as every other agent). Assign one there before it can produce reports; until then it just
 # logs an error each interval and keeps retrying.
 #
-# ANALYZER_API_KEY below ships with a real generated default so both services talk to each other
-# out of the box — no `openssl rand -hex 32` step needed. Since both hop over the internal compose
-# network only (never the public internet), a shared baked-in default is low-risk here; rotate it
-# in your own `.env` if you'd rather not rely on the checked-in value (e.g. before making this repo
-# public, or before running a security-sensitive deployment).
+# ANALYZER_API_KEY: the agency AUTO-GENERATES + persists a strong key on first boot if this is left
+# unset (mirrors MASTER_KEY — see src/analyzerKey.ts), so the `agency` service alone needs zero
+# config. The vendored `analyzer` service below is a SEPARATE container with no shared DB/volume,
+# so it can't see that generated value on its own — it only gets one if YOU set ANALYZER_API_KEY in
+# your own `.env` (shared by both services here). If you leave it unset, copy the agency's
+# auto-generated key from Settings → General → Process Analyzer into your `.env` as
+# ANALYZER_API_KEY, then restart the `analyzer` service so it picks it up. No checked-in secret
+# ships in this file anymore — see COOLIFY.md / analyzer/README.md for the full rundown.
 services:
   agency:
     build: .
@@ -47,8 +50,9 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}           # e.g. "Dev Agency <no-reply@yourdomain.com>"
       SMTP_SECURE: ${SMTP_SECURE:-}       # true|false to override (defaults: true on 465, else false)
       # Enables the read-only /telemetry + /analyzer-run APIs the `analyzer` service below calls.
-      # Same value as AGENCY_API_KEY on that service (prefilled — see the note above).
-      ANALYZER_API_KEY: ${ANALYZER_API_KEY:-ae3d3a8af34d5086fb00146f529afe99fdffd9ea4d6e2fc158cdcbc63b2fb96}
+      # Leave unset to auto-generate (recommended); set it to match AGENCY_API_KEY below only if you
+      # run the vendored `analyzer` service (see the note above).
+      ANALYZER_API_KEY: ${ANALYZER_API_KEY:-}
       # Other optional overrides — uncomment only to pin a value:
       # MASTER_KEY: ${MASTER_KEY:-}       # pin the secrets-encryption key (else auto-generated +
       #                                   # persisted at /app/data/.masterkey — keep the volume!)
@@ -69,7 +73,10 @@ services:
     environment:
       # Internal compose network — no public URL/TLS needed for this hop (see analyzer/README.md).
       AGENCY_URL: http://agency:3000
-      AGENCY_API_KEY: ${ANALYZER_API_KEY:-ae3d3a8af34d5086fb00146f529afe99fdffd9ea4d6e2fc158cdcbc63b2fb96}
+      # Must match the agency's ANALYZER_API_KEY. Since the agency auto-generates its own if you
+      # leave that unset, this sidecar starts with an EMPTY key until you copy the generated value
+      # (Settings → General → Process Analyzer, on the agency side) into your `.env` for both.
+      AGENCY_API_KEY: ${ANALYZER_API_KEY:-}
     # No volumes, no LLM credential — telemetry + the analysis pass itself both go over HTTP to the
     # agency; cursor is in-memory (see analyzer/README.md).
 

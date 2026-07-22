@@ -66,6 +66,8 @@ import { putAttachment, getAttachment } from "./db/attachments.js";
 import { dispatch } from "./pool.js";
 import { syncInEvent } from "./tracker.js";
 import { ensureRepoIndex } from "./gitnexus.js";
+import { analyzerApiKey } from "./analyzerKey.js";
+import { maybeContributeAnalyzerIssueUpstream } from "./upstream.js";
 
 type ProcessAll = (cfg: Config) => Promise<number>;
 type Resume = (repo: string, number: number) => Promise<void>;
@@ -229,14 +231,15 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
     // analyzer needs almost no config of its own: it reads aggregate telemetry + tuning here, and the
     // agency opens the advisory issue on its behalf (so the analyzer carries no GitHub token/repo).
     // Least-privilege: aggregate metrics only (no secrets/bodies) + a rate-limited advisory issue the
-    // agency never acts on without approval. Disabled (503) unless a strong key is set AND the
-    // "Enable the Process Analyzer" toggle (Settings → General) is on — the toggle defaults to on
-    // (matching docker-compose.yml's prefilled key, so it works out of the box) but is a real,
-    // explicit kill-switch: flip it off to stop the analyzer even if a key is still configured.
+    // agency never acts on without approval. Disabled (503) unless the "Enable the Process Analyzer"
+    // toggle (Settings → General) is on — a real, explicit kill-switch, independent of the key. The
+    // key itself (analyzerApiKey(), src/analyzerKey.ts) is auto-generated + persisted on first boot
+    // (mirrors MASTER_KEY) rather than shipped baked into docker-compose.yml — copy the generated
+    // value from Settings → General → Process Analyzer into a standalone/vendored analyzer sidecar.
     {
       const aurl = (req.url ?? "/").split("?")[0];
       if (aurl === "/telemetry" || aurl === "/analyzer-issue" || aurl === "/analyzer-analyze") {
-        const key = (process.env.ANALYZER_API_KEY || getSetting("analyzer_api_key") || "").trim();
+        const key = analyzerApiKey();
         const enabled = sBool("analyzer_enabled", "", true);
         if (!enabled) return void res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: "analyzer disabled in Settings" }));
         if (!key || key.length < 16) return void res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: "analyzer API disabled (set a strong ANALYZER_API_KEY)" }));
@@ -305,6 +308,10 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // DB-first origin flag (ADR-0001: no GitHub label) so the dashboard can give these their own
           // visible place instead of blending into ordinary Inbox noise — see /data's `analyzerProposal`.
           if (r.number) { setSetting("analyzer_last_issue_ts", new Date().toISOString()); setSetting(`analyzer_issue.${repoT}#${r.number}`, "1"); }
+          // Controlled upstream-contribution channel (P5): mirror the SAME advisory upstream too,
+          // IF it's generic and the channel is on — entirely gated inside this call (no-op
+          // otherwise). Never blocks the response above.
+          void maybeContributeAnalyzerIssueUpstream(cfg, { title, body: ibody });
           res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ number: r.number }));
         })();
         return;
@@ -627,10 +634,15 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
                 byModel: tokensByModelSince(win.startIso),
               },
               analyzer: {
-                enabled: Boolean((process.env.ANALYZER_API_KEY || getSetting("analyzer_api_key") || "").trim()),
+                // A key is now ALWAYS configured (auto-generated + persisted, see analyzerApiKey()) —
+                // "enabled" reflects the real Settings → General kill-switch instead of key presence.
+                enabled: sBool("analyzer_enabled", "", true),
                 lastPull: getSetting("analyzer_last_pull") || null,
                 lastIssueAt: getSetting("analyzer_last_issue_ts") || null,
                 url: getSetting("analyzer_url") || null,
+                // Admin-only, for the masked reveal-to-copy control in Settings → General (the
+                // vendored/standalone analyzer sidecar needs this SAME value in its own env).
+                keyForAdmin: sessionUser && sessionUser.role === "admin" ? analyzerApiKey() : null,
               },
             }),
           );
@@ -1772,9 +1784,9 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // direction. This one is browser session-cookie auth; that one is the analyzer's own key.
           if (actor.role !== "admin") return res.writeHead(403).end('{"error":"admin only"}');
           const base = (getSetting("analyzer_url") || "").trim().replace(/\/+$/, "");
-          const key = (process.env.ANALYZER_API_KEY || getSetting("analyzer_api_key") || "").trim();
+          const key = analyzerApiKey();
           if (!base) return res.writeHead(400).end(JSON.stringify({ error: "Set the analyzer URL in Settings first" }));
-          if (!key || key.length < 16) return res.writeHead(400).end(JSON.stringify({ error: "Set a strong ANALYZER_API_KEY first" }));
+          if (!key || key.length < 16) return res.writeHead(400).end(JSON.stringify({ error: "ANALYZER_API_KEY isn't configured" }));
           try {
             const r = await fetch(`${base}/run`, { method: "POST", headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
             if (r.status === 202) return ok(JSON.stringify({ ok: true, started: true }));
