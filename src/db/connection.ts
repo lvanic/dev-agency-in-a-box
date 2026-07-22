@@ -253,6 +253,24 @@ export function getDb(): DatabaseSync | null {
         meta TEXT, created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS orch_msg_repo ON orch_msg (repo, id);
+      -- Per-issue run thread (P1, prime-time-plan): every say()/sayAs() in pipeline.ts lands here
+      -- FIRST, before the GitHub comment that mirrors it — this table (not GitHub) is what the
+      -- dashboard's run-thread panel and the repo Orchestrator (via issue_digest) actually read.
+      CREATE TABLE IF NOT EXISTS run_msg (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo TEXT NOT NULL, number INTEGER NOT NULL, run_id TEXT NOT NULL,
+        agent TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL,
+        meta TEXT, created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS run_msg_issue ON run_msg (repo, number, id);
+      -- Deterministic (no-LLM) per-issue digest, upserted on every run_msg append — the compact
+      -- "what's happening on #N right now" line the repo Orchestrator's repoContext() reads instead
+      -- of re-deriving it (or worse, re-reading the whole thread) on every chat turn.
+      CREATE TABLE IF NOT EXISTS issue_digest (
+        repo TEXT NOT NULL, number INTEGER NOT NULL,
+        digest TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY (repo, number)
+      );
       CREATE TABLE IF NOT EXISTS change_journal (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         repo TEXT NOT NULL, number INTEGER NOT NULL, title TEXT,

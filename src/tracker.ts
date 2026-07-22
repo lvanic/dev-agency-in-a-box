@@ -28,6 +28,7 @@ import {
   deleteLocalCommentByGhId,
   getLocalComments,
 } from "./store.js";
+import { pushRunMsg } from "./activity.js";
 import { withStatus } from "./state.js";
 
 export interface TrackerIssue {
@@ -197,10 +198,14 @@ export function syncInEvent(repo: string, event: string, payload: InboundEvent):
 }
 
 /** Inbound sync: fold a GitHub comment into the DB (dedup by GitHub id, echo-collapse our own posts,
- *  preserve GitHub's timestamp for correct time-sorting). Webhook calls this. */
+ *  preserve GitHub's timestamp for correct time-sorting). Webhook calls this. Also pushes a live
+ *  SSE event for a genuinely NEW inbound comment (e.g. a human replying straight on GitHub) — the
+ *  Detail run-thread panel no longer polls, so without this a reply typed on GitHub would never
+ *  show up until something else happened to trigger a reload. */
 export function syncInComment(repo: string, number: number, ghId: number, author: string, body: string, isAgency: boolean, createdAt?: string): void {
   const clean = (body || "").replace(AGENCY_MARKER, "").trim();
-  foldInGitHubComment({ repo, number, gh_id: ghId, author, body: clean, created_at: createdAt || "", isAgency });
+  const isNew = foldInGitHubComment({ repo, number, gh_id: ghId, author, body: clean, created_at: createdAt || "", isAgency });
+  if (isNew) pushRunMsg(ghId, repo, number, `github-${ghId}`, author, clean, isAgency);
 }
 
 /** Inbound sync: fold a GitHub issue (opened/edited) into the DB as the adopted record. */

@@ -15,6 +15,7 @@ export function resetIssueData(repo: string, number: number): void {
   const byIssue = [
     "local_comment", "runs", "plans", "run_step", "activity", "lessons",
     "issue_files", "thread_cursor", "agent_sessions", "pr_review", "pr_conflict", "attachments",
+    "run_msg", "issue_digest",
   ];
   for (const t of byIssue) {
     try { d.prepare(`DELETE FROM ${t} WHERE repo = ? AND number = ?`).run(repo, number); } catch { /* best effort */ }

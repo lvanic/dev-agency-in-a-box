@@ -95,7 +95,9 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
     setChatAtTop(el.scrollTop < 60);
   }
 
-  function loadThread() {
+  // Legacy path: the GitHub-backed thread (reconciles with GitHub, local_comment-cached). Kept ONLY
+  // as the fallback for issues that predate the run thread (no run_msg rows yet) — see loadThread.
+  function loadGithubThread() {
     getJSON("/thread?repo=" + encodeURIComponent(repo) + "&number=" + number)
       .then((t) => {
         if (t && Array.isArray(t.comments)) {
@@ -112,6 +114,17 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
         toast(errMsg);
       });
   }
+  // P1 (prime-time-plan): the DB-first run thread — one fetch, no polling. New messages arrive live
+  // over the shared /events SSE stream (see the appliedMsgRef effect below); GitHub is only consulted as
+  // a one-time fallback for issues from before this table existed (hasRunMsgs === false).
+  function loadThread() {
+    getJSON("/run-thread?repo=" + encodeURIComponent(repo) + "&number=" + number)
+      .then((t) => {
+        if (t && Array.isArray(t.comments) && t.hasRunMsgs) setThread(t);
+        else loadGithubThread();
+      })
+      .catch(loadGithubThread);
+  }
   useEffect(() => {
     setModelOverride(issue.modelOverride ? issue.modelOverride.providerId + "/" + issue.modelOverride.model : "");
   }, [issue.modelOverride?.providerId, issue.modelOverride?.model]);
@@ -121,13 +134,39 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
     loadThread();
     if (issue.pr_number) getJSON("/pr-status?repo=" + encodeURIComponent(repo) + "&number=" + number).then(setPr).catch(() => {});
     getJSON("/app-info?repo=" + encodeURIComponent(repo) + "&number=" + number).then(setAppInfo).catch(() => setAppInfo({ kind: "unknown" }));
-    const t = setInterval(loadThread, 6000); return () => clearInterval(t);
+    // No poll: the run thread follows live via the appliedMsgRef effect below (SSE "run_msg" events).
   }, [repo, number, issue._audit, issue.pr_number]);
+
+  // Live conversation updates: append (never re-fetch) new "run_msg" SSE events onto the loaded
+  // thread — de-duped by their run_msg/local_comment row id, so a message already in the initial
+  // /run-thread load is never doubled once its SSE echo arrives.
+  const appliedMsgRef = useRef(new Set());
+  useEffect(() => {
+    if (!thread || !Array.isArray(thread.comments)) return;
+    const news = activity.filter((a) => a.kind === "run_msg" && a.repo === repo && a.number === number);
+    if (!news.length) return;
+    const additions = [];
+    for (const a of news) {
+      const key = "rm-" + (a.msgId || (a.runId + "|" + a.ts));
+      if (appliedMsgRef.current.has(key)) continue;
+      appliedMsgRef.current.add(key);
+      additions.push({ id: 0, localId: key, author: a.isAgency === false ? (a.role || "you") : "dev-agency", body: a.text, createdAt: new Date(a.ts).toISOString(), isAgency: a.isAgency !== false, incoming: false });
+    }
+    if (additions.length) {
+      setThread((prev) => (prev && Array.isArray(prev.comments) ? { ...prev, comments: prev.comments.concat(additions) } : prev));
+      // Our own reply echoes back as a live "run_msg" almost immediately (see POST /comment in
+      // webhook.ts) — clear its optimistic skeleton the moment that echo arrives (matched on body),
+      // instead of always waiting out sendFull's fixed 800ms timeout, so the two never double-render.
+      setPendingComments((ps) => ps.filter((p) => !news.some((a) => a.isAgency === false && (a.text || "").trim() === (p.body || "").trim())));
+    }
+  }, [activity, thread, repo, number]);
 
   // Coalesce consecutive "delta" fragments (live partial-text "typing") from the same role into one
   // growing line so the stream reads as a paragraph, not 50 single-token rows. Non-delta events pass through.
   const stream = (() => {
-    const raw = activity.filter((a) => a.repo === repo && a.number === number);
+    // "run_msg" events are the Conversation pane's live feed (see the appliedMsgRef effect above),
+    // not the raw thought/tool stream — keep them out of this pane so nothing shows twice.
+    const raw = activity.filter((a) => a.repo === repo && a.number === number && a.kind !== "run_msg");
     const out = [];
     for (const a of raw) {
       const prev = out[out.length - 1];

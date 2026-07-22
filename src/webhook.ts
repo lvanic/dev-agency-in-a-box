@@ -50,10 +50,11 @@ import { hasActiveRun, requestHold, queueSteer, peekSteer, isHoldRequested } fro
 import { renderLogin, renderInvite, renderSetup, renderForgot, renderReset } from "./authpages.js";
 import { authenticate, createSession, revokeSession, getInvite, acceptInvite, createInvite, createUser, listUsers, listInvites, setUserSecret, listUserSecretKeys, countUsers, setUserPassword, getUserByName, getUserByNameOrEmail, createPasswordReset, consumePasswordReset, type User } from "./store.js";
 import { emailEnabled, sendPasswordReset } from "./email.js";
-import { subscribe, getActive, pushActivity, clearActivity } from "./activity.js";
+import { subscribe, getActive, pushActivity, pushRunMsg, clearActivity } from "./activity.js";
 import { inFlightKeys } from "./pool.js";
 import { listRateLimited } from "./store.js";
 import { getConversation, conversationCount, foldInGitHubComment, recordOutgoingComment, setCommentGhId, updateCommentBody } from "./store.js";
+import { listRunThread, renderBadge } from "./store.js";
 import { recentFailuresSince } from "./store.js";
 import { effectiveRepos } from "./commands.js";
 import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists, createRepo } from "./github.js";
@@ -920,6 +921,47 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         return;
       }
 
+      // P1 (prime-time-plan): the DB-first run thread — say()/sayAs() writes here, no GitHub round-
+      // trip needed. Merges agent messages (run_msg) with human/GitHub-inbound ones (local_comment).
+      // Client reads this ONCE on open, then follows live via /events ("run_msg" kind) — no polling.
+      if (url === "/run-thread") {
+        const q = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
+        const repo = q.get("repo") ?? "";
+        const number = Number(q.get("number"));
+        if (!repo || !number) return void res.writeHead(400).end("{}");
+        const runRows = listRunThread(repo, number, 300);
+        const firstRunTs = runRows[0]?.createdAt;
+        // Non-agency rows (human replies + inbound GitHub comments) always come from local_comment —
+        // run_msg only ever carries agent messages. Agency-sourced local_comment rows are normally
+        // SKIPPED (run_msg already carries that content, richer) — EXCEPT any that predate the very
+        // first run_msg row, i.e. an issue whose agent history started before this table existed.
+        // Without that exception a mid-history migration would silently drop its earlier agency turns.
+        const legacyRows = getConversation(repo, number).filter((c) => !c.isAgency || (firstRunTs && c.createdAt < firstRunTs));
+        const merged = [
+          ...runRows.map((r) => ({
+            id: 0,
+            localId: `rm-${r.id}`,
+            author: "dev-agency",
+            body: `${renderBadge(r.agent)}\n\n${r.body}`,
+            createdAt: r.createdAt,
+            isAgency: true,
+            incoming: false,
+          })),
+          ...legacyRows,
+        ].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+        let head: { title?: string; body?: string; author?: string; createdAt?: string; state?: string } = {};
+        try { head = JSON.parse(getSetting(`head:${repo}#${number}`) || "{}"); } catch { /* none cached yet */ }
+        return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+          hasRunMsgs: runRows.length > 0,
+          title: head.title ?? `#${number}`,
+          body: head.body ?? "",
+          author: head.author ?? "?",
+          createdAt: head.createdAt ?? "",
+          state: head.state ?? "open",
+          comments: merged,
+        }));
+      }
+
       if (url === "/orch") {
         const q = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
         const repo = q.get("repo") ?? "";
@@ -1111,6 +1153,8 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // the agent reads it from here), then mirror to GitHub in the BACKGROUND. The chat never
           // waits on — or fails because of — a GitHub round-trip.
           const localId = recordOutgoingComment({ repo, number, author: actor?.username || "you", body: text, source: "human" });
+          // Live-push so every open dashboard tab sees the reply instantly (P1: no more thread poll).
+          pushRunMsg(localId, repo, number, `human-${Date.now()}`, actor?.username || "you", text, false);
           void (async () => {
             try {
               // Post under the owner's account (your token) so it shows your name, not the bot's.

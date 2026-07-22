@@ -45,9 +45,9 @@ function held(repo: string, number: number, where: string): boolean {
   return false;
 }
 import type { RoleName } from "./agents/roles.js";
-import { recordRun, recordPlan, lastPlan, recordIssueStatus, getIssueStatus, recordIssueFiles, recordPr, setByAgent, addEpicChild, listEpicChildren, getSession, issueActivity, recordReview, getReview, recordConflict, clearConflict, getSetting, setSetting, skillsPrompt, listHooks, listAgentDefs, changesTouchingFiles, getWorkflowByTrigger, setIssueWorkflow, type Workflow } from "./store.js";
+import { recordRun, recordPlan, lastPlan, recordIssueStatus, getIssueStatus, recordIssueFiles, recordPr, setByAgent, addEpicChild, listEpicChildren, getSession, issueActivity, recordReview, getReview, recordConflict, clearConflict, getSetting, setSetting, skillsPrompt, listHooks, listAgentDefs, changesTouchingFiles, getWorkflowByTrigger, setIssueWorkflow, appendRunMsg, renderBadge, upsertIssueDigest, refreshIssueDigest, type Workflow } from "./store.js";
 import { conflictFiles } from "./github.js";
-import { pushActivity, setActive } from "./activity.js";
+import { pushActivity, pushRunMsg, setActive, getActive } from "./activity.js";
 import { execSync } from "node:child_process";
 import { runReflection } from "./reflect.js";
 import { runChecks, baselineFailures, parseDiscoveredChecks, rememberChecks } from "./checks.js";
@@ -155,27 +155,42 @@ function changesRequested(reviewText: string): boolean {
   return /request\s+changes/i.test(firstLine);
 }
 
-/** Visible worker badge so each comment reads as the teammate that wrote it. */
-const BADGE: Record<RoleName, string> = {
-  planner: "🧠 **Planner**",
-  decomposer: "🪓 **Decomposer**",
-  developer: "💻 **Developer**",
-  reviewer: "🔍 **Reviewer**",
-  tester: "🧪 **Tester**",
-  architect: "🏛 **Architect**",
-  librarian: "📚 **Librarian**",
-  auditor: "🔎 **Auditor**",
-  analyzer: "🔬 **Analyzer**",
-};
-function say(role: RoleName, body: string): string {
-  return `${BADGE[role]} · _dev-agency_\n\n${body}`;
+/** Best-effort "which run is this" tag: the live-work registry's start time for this issue, so every
+ *  message from the same press-Start/Resume groups under one run_id. say()/sayAs() only ever run
+ *  from inside a pipeline that setActive()s first, so the "adhoc" branch is just a safety net. */
+function currentRunId(repo: string, number: number): string {
+  const w = getActive().find((a) => a.repo === repo && a.number === number);
+  return w ? String(w.since) : `adhoc-${Date.now()}`;
 }
-// Author a comment AS a custom workflow agent (its emoji + Name) so the dashboard shows that agent's
+
+/**
+ * Emit an agent message: DB-first (ADR-0001) — appended to the per-issue run thread (`run_msg`) and
+ * broadcast over SSE BEFORE anything touches GitHub, so the dashboard and the repo Orchestrator both
+ * see it instantly and never depend on a GitHub round-trip. The GitHub comment posted afterward is a
+ * MIRROR, not the source of truth. `mirrorPr`, when given, mirrors to that PR's conversation instead
+ * of the issue's own (the PR-fix flow comments on the PR, not the tracked issue).
+ */
+async function say(repo: string, number: number, role: RoleName, body: string, mirrorPr?: number): Promise<void> {
+  const runId = currentRunId(repo, number);
+  const id = appendRunMsg(repo, number, runId, role, "comment", body); // raw (unbadged) — clean for the digest
+  upsertIssueDigest(repo, number, role, body);
+  // Broadcast the SAME badge-prefixed text /run-thread's initial load returns, so a live SSE append
+  // renders identically to the history the client already loaded (Comment.js reads the badge off body).
+  const formatted = `${renderBadge(role)}\n\n${body}`;
+  pushRunMsg(id, repo, number, runId, role, formatted);
+  if (mirrorPr) await commentOnPr(repo, mirrorPr, formatted);
+  else await commentOnIssue(repo, number, formatted);
+}
+// Author a message AS a custom workflow agent (its emoji + Name) so the dashboard shows that agent's
 // face + name — not the base role. DB-first: the step IS the agent; it runs, it isn't @-called.
-function sayAs(name: string, body: string): string {
+async function sayAs(repo: string, number: number, name: string, body: string): Promise<void> {
   const label = name.replace(/^@/, "");
-  const Cap = label.charAt(0).toUpperCase() + label.slice(1);
-  return `🤖 **${Cap}** · _dev-agency_\n\n${body}`;
+  const runId = currentRunId(repo, number);
+  const id = appendRunMsg(repo, number, runId, label, "comment", body);
+  upsertIssueDigest(repo, number, label, body);
+  const formatted = `${renderBadge(label)}\n\n${body}`;
+  pushRunMsg(id, repo, number, runId, label, formatted);
+  await commentOnIssue(repo, number, formatted);
 }
 
 export type PlannerDecision = { kind: "questions" | "plan"; body: string; auto: boolean };
@@ -252,18 +267,14 @@ async function finalizeWithPr(repo: string, issue: Issue, workdir: string, branc
     const head = changesRequested
       ? `**⚠️ PR opened, but the reviewer still wants changes.** ${pr.url}\n\nPress **Fix** on the card to address them, or **Merge anyway** to ship as-is.`
       : `**✅ Work complete.** Opened ${pr.isDraft ? "draft " : ""}PR ${pr.url}`;
-    await commentOnIssue(
-      repo,
-      issue.number,
-      say("developer", [
-        head,
-        "",
-        "Test it locally:",
-        "```bash",
-        `git fetch origin && git checkout ${branch}`,
-        "```",
-      ].join("\n")),
-    );
+    await say(repo, issue.number, "developer", [
+      head,
+      "",
+      "Test it locally:",
+      "```bash",
+      `git fetch origin && git checkout ${branch}`,
+      "```",
+    ].join("\n"));
     console.log(`[agency] ${repo} #${issue.number} -> review. PR: ${pr.url}`);
     return true;
   } else {
@@ -290,7 +301,7 @@ async function parkUnverified(repo: string, issue: Issue, branch: string, needed
   const ask = tc
     ? `This project needs the **${tc.label}** toolchain to run its checks, and it isn't installed on the agency yet.\n\n➡️ Install it under **Settings → Environments**, then press **Recheck** on the card. No PR is opened until the checks actually run.`
     : `The checks couldn't run in the sandbox (missing toolchain / environment), so the change is **unverified** — not green. No PR is opened. Verify locally or in CI, or press **Recheck** once the environment can run it.`;
-  await commentOnIssue(repo, issue.number, say("tester", `⏸ **Paused — can't verify here.**\n\n${ask}\n\nYour work is safe on \`${branch}\`.`));
+  await say(repo, issue.number, "tester", `⏸ **Paused — can't verify here.**\n\n${ask}\n\nYour work is safe on \`${branch}\`.`);
   console.log(`[agency] ${repo} #${issue.number} -> paused (unverified${tc ? `, needs ${tc.id}` : ""}).`);
   return false;
 }
@@ -384,7 +395,7 @@ async function splitIntoPlanned(repo: string, issue: Issue, text: string): Promi
     setByAgent(repo, created.number, true); // DB-first marker — the dashboard reads this, not a GitHub label
     recordRun(repo, issue.number, "decomposer", MODELS_NONE, 0, "create-issue");
   }
-  await commentOnIssue(repo, issue.number, say("decomposer", `**Split into ${items.length} epic(s)** — created as **Planned** (tagged \`by agent\`). Review each and press ▶ Start to build it; the build then breaks the epic into sub-issues.`));
+  await say(repo, issue.number, "decomposer", `**Split into ${items.length} epic(s)** — created as **Planned** (tagged \`by agent\`). Review each and press ▶ Start to build it; the build then breaks the epic into sub-issues.`);
   await upsertTrackerComment(repo, issue.number, renderEpicTracker(listEpicChildren(repo, issue.number))).catch(() => {});
   recordIssueStatus(repo, issue.number, withStatus("review"));
   return items.length;
@@ -403,11 +414,7 @@ async function maybeDecompose(repo: string, issue: Issue, planText: string): Pro
     applyRoute(repo, created.number, s.route); // planner's recommended workflow/agent
     recordRun(repo, issue.number, "planner", MODELS_NONE, 0, "create-issue");
   }
-  await commentOnIssue(
-    repo,
-    issue.number,
-    say("planner", `**Created ${subs.length} sub-issue(s)** — tracking them below. This becomes an **epic**: it completes (and becomes reviewable/mergeable) when all sub-issues are done.`),
-  );
+  await say(repo, issue.number, "planner", `**Created ${subs.length} sub-issue(s)** — tracking them below. This becomes an **epic**: it completes (and becomes reviewable/mergeable) when all sub-issues are done.`);
   // Post the live checklist and keep the parent as an epic (not "ready" yet). Epic-ness is
   // isEpic() (the epics table), not a lifecycle state — the parent's real state (working) is
   // untouched here; reconcileEpics moves it to review once every child is done.
@@ -466,7 +473,7 @@ async function build(
   recordRun(repo, issue.number, "developer", dev.model, dev.turns, "implement", dev.costUsd);
 
   const test = await runTests(repo, issue.number, workdir, branch);
-  await commentOnIssue(repo, issue.number, say("tester", `**Test results**\n\n${test.text}`));
+  await say(repo, issue.number, "tester", `**Test results**\n\n${test.text}`);
 
   // Ask-first: a managed toolchain is missing → pause NOW (before spending a review) and ask the
   // user to install it. No PR until the checks actually run. Work is pushed by parkUnverified.
@@ -493,7 +500,7 @@ async function build(
   const retest = async (label: string): Promise<void> => {
     const t = await runTests(repo, issue.number, workdir, branch);
     testText = t.text; testPass = t.pass; testVerified = t.verified;
-    await commentOnIssue(repo, issue.number, say("tester", `**${label}**\n\n${t.text}`));
+    await say(repo, issue.number, "tester", `**${label}**\n\n${t.text}`);
   };
 
   for (;;) {
@@ -524,7 +531,7 @@ async function build(
     });
     recordRun(repo, issue.number, "reviewer", review.model, review.turns, "review", review.costUsd);
     lastReview = review.text; reviews++;
-    await commentOnIssue(repo, issue.number, say("reviewer", `**Review (round ${reviews})**\n\n${review.text}`));
+    await say(repo, issue.number, "reviewer", `**Review (round ${reviews})**\n\n${review.text}`);
 
     const verdict: "approved" | "changes" = changesRequested(review.text) ? "changes" : "approved";
     const d = decideNext({ phase: "reviewed", devChanged: true, reviewVerdict: verdict, round, maxRounds: maxR });
@@ -541,6 +548,7 @@ async function build(
   // (after the one allowed auto-revise round). If so, the card flags it and offers a Fix button.
   const stillChanges = changesRequested(lastReview);
   recordReview(repo, issue.number, stillChanges ? "changes" : "approved", lastReview);
+  refreshIssueDigest(repo, issue.number); // the round's say("reviewer", …) upserted BEFORE this verdict landed
 
   const ok = await finalizeWithPr(repo, issue, workdir, branch, stillChanges, !testVerified);
   if (ok) {
@@ -579,7 +587,7 @@ async function runDeveloperPipeline(
     if (planText) {
       // If the plan was a decomposition, open the sub-issues instead of building this one.
       if (await maybeDecompose(repo, issue, planText)) return;
-      await commentOnIssue(repo, issue.number, say("developer", "**Approved — building it now.**"));
+      await say(repo, issue.number, "developer", "**Approved — building it now.**");
       await build(repo, issue, workdir, planText, thread);
       return;
     }
@@ -588,7 +596,7 @@ async function runDeveloperPipeline(
   // 1. Planner — research + recommend (only asks questions if genuinely blocked).
   const decision = await plan(repo, issue, workdir, thread);
   if (decision.kind === "questions" && decision.body.replace(/\s+/g, " ").trim().length >= 12) {
-    await commentOnIssue(repo, issue.number, say("planner", `**A few questions before I plan**\n\n${decision.body}`));
+    await say(repo, issue.number, "planner", `**A few questions before I plan**\n\n${decision.body}`);
     await pause(repo, issue, "awaitingAnswer");
     console.log(`[agency] ${repo} #${issue.number} -> awaiting answer.`);
     return;
@@ -598,7 +606,7 @@ async function runDeveloperPipeline(
   // approve nothing. Just build it from the issue (the developer has the issue + playbooks).
   if (decision.kind === "plan" && !decision.auto && decision.body.replace(/\s+/g, " ").trim().length < 24) {
     recordPlan(repo, issue.number, issueHeader(issue));
-    await commentOnIssue(repo, issue.number, say("planner", "**Building now.**"));
+    await say(repo, issue.number, "planner", "**Building now.**");
     await build(repo, issue, workdir, decision.body || issueHeader(issue), thread);
     return;
   }
@@ -606,7 +614,7 @@ async function runDeveloperPipeline(
   // Default: the planner said PLAN AUTO — build immediately, no approval gate, short note.
   if (decision.auto) {
     recordPlan(repo, issue.number, decision.body);
-    await commentOnIssue(repo, issue.number, say("planner", `**Building now.**\n\n${decision.body}`));
+    await say(repo, issue.number, "planner", `**Building now.**\n\n${decision.body}`);
     await build(repo, issue, workdir, decision.body, thread);
     return;
   }
@@ -630,11 +638,7 @@ async function runDeveloperPipeline(
     proposal = `${decision.body}\n\n---\n\n### 🏛 Technical plan (Architect)\n\n${arch.text}`;
   }
   recordPlan(repo, issue.number, proposal);
-  await commentOnIssue(
-    repo,
-    issue.number,
-    say("planner", `**Larger change — quick sign-off?**\n\n${proposal}\n\n---\n\n👉 **👍** (or reply \`ok\`) to build. For changes, just say what to change.`),
-  );
+  await say(repo, issue.number, "planner", `**Larger change — quick sign-off?**\n\n${proposal}\n\n---\n\n👉 **👍** (or reply \`ok\`) to build. For changes, just say what to change.`);
   await pause(repo, issue, "awaitingApproval");
   console.log(`[agency] ${repo} #${issue.number} -> awaiting approval.`);
 }
@@ -659,24 +663,20 @@ async function runSpecialist(
     if ((getIssueStatus(repo, issue.number).blocked === "awaitingApproval" || planApproved) && (await approved(repo, issue, thread))) {
       const planText = lastPlan(repo, issue.number) ?? "";
       if (await maybeDecompose(repo, issue, planText)) return;
-      await commentOnIssue(repo, issue.number, say("planner", "**👍 Plan accepted.** Press **▶ Start** on the dashboard to build it."));
+      await say(repo, issue.number, "planner", "**👍 Plan accepted.** Press **▶ Start** on the dashboard to build it.");
       recordIssueStatus(repo, issue.number, withStatus("review"));
       return;
     }
 
     const decision = await plan(repo, issue, workdir, thread);
     if (decision.kind === "questions") {
-      await commentOnIssue(repo, issue.number, say("planner", `**A few questions**\n\n${decision.body}`));
+      await say(repo, issue.number, "planner", `**A few questions**\n\n${decision.body}`);
       recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "awaitingAnswer"));
       return;
     }
     // Post the plan and keep the conversation open — reply to refine, or "ok" to accept.
     recordPlan(repo, issue.number, decision.body);
-    await commentOnIssue(
-      repo,
-      issue.number,
-      say("planner", `**Plan**\n\n${decision.body}\n\n---\n\n👉 **👍** (or reply \`ok\`) to accept. For changes, just reply with the change.`),
-    );
+    await say(repo, issue.number, "planner", `**Plan**\n\n${decision.body}\n\n---\n\n👉 **👍** (or reply \`ok\`) to accept. For changes, just reply with the change.`);
     recordIssueStatus(repo, issue.number, setBlocked(withStatus("planned"), "awaitingApproval"));
     return;
   }
@@ -693,7 +693,7 @@ async function runSpecialist(
 
   const out = await runRole(role, { workdir, repo, issueNumber: issue.number, task: tasks[role] });
   recordRun(repo, issue.number, role, out.model, out.turns, "specialist", out.costUsd);
-  await commentOnIssue(repo, issue.number, say(role, out.text));
+  await say(repo, issue.number, role, out.text);
   recordIssueStatus(repo, issue.number, withStatus("review"));
   console.log(`[agency] ${repo} #${issue.number} -> review (${role}).`);
 }
@@ -735,7 +735,7 @@ export async function runPrFix(
   recordRun(repo, issueNumber, "developer", dev.model, dev.turns, "pr-fix", dev.costUsd);
 
   const test = await runTests(repo, pr, workdir, branch);
-  await commentOnPr(repo, pr, say("developer", `**Pushed fixes.**\n\n${test.text}`));
+  await say(repo, issueNumber, "developer", `**Pushed fixes.**\n\n${test.text}`, pr);
 
   // Re-review so the verdict (and the card's ⚠ badge) reflects the new state of the PR.
   const review = await runRole("reviewer", {
@@ -748,8 +748,9 @@ export async function runPrFix(
     ...(getSession(repo, pr, "reviewer") ? { resumeSessionId: getSession(repo, pr, "reviewer") ?? undefined } : {}),
   });
   recordRun(repo, issueNumber, "reviewer", review.model, review.turns, "review", review.costUsd);
-  await commentOnIssue(repo, issueNumber, say("reviewer", `**Review (after fix)**\n\n${review.text}`));
+  await say(repo, issueNumber, "reviewer", `**Review (after fix)**\n\n${review.text}`);
   recordReview(repo, issueNumber, changesRequested(review.text) ? "changes" : "approved", review.text);
+  refreshIssueDigest(repo, issueNumber); // the say() above upserted BEFORE this verdict landed
 }
 
 export async function runPipeline(
@@ -792,7 +793,7 @@ export async function runResumeBuild(repo: string, issue: Issue, workdir: string
   if (stopped(repo, issue.number, "runResumeBuild")) return;
   if (held(repo, issue.number, "runResumeBuild")) return;
   const planText = lastPlan(repo, issue.number) ?? "(plan unavailable — infer from the issue + branch)";
-  await commentOnIssue(repo, issue.number, say("developer", "**Resuming** from where it stopped — continuing the existing branch, not redoing finished work."));
+  await say(repo, issue.number, "developer", "**Resuming** from where it stopped — continuing the existing branch, not redoing finished work.");
   await build(repo, issue, workdir, planText, thread, { digest: resumeDigest(repo, issue.number) });
 }
 
@@ -840,7 +841,7 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
     }
 
     if (m.status === "conflicts") {
-      await commentOnIssue(repo, issue.number, say("developer", `**Resolving merge conflicts with ${base}** in ${m.files.length} file(s): ${m.files.map((f) => "`" + f + "`").join(", ")}.`));
+      await say(repo, issue.number, "developer", `**Resolving merge conflicts with ${base}** in ${m.files.length} file(s): ${m.files.map((f) => "`" + f + "`").join(", ")}.`);
       const dev = await runRole("developer", {
         workdir,
         repo,
@@ -860,7 +861,7 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
       });
       recordRun(repo, issue.number, "developer", dev.model, dev.turns, "resolve-conflict", dev.costUsd);
     } else {
-      await commentOnIssue(repo, issue.number, say("developer", `**Merged the latest ${base} in cleanly** — no conflicts.`));
+      await say(repo, issue.number, "developer", `**Merged the latest ${base} in cleanly** — no conflicts.`);
     }
 
     // Commit the merge (if not already) and push it. This is the step the loop was missing.
@@ -884,7 +885,7 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
     if (!wantsChanges) {
       // The conflict was the only blocker — finalize as ready WITHOUT a review cycle. Done.
       await finalizeWithPr(repo, issue, workdir, branch, false);
-      await commentOnIssue(repo, issue.number, say("developer", `**✅ Merge conflicts resolved** — the PR is mergeable again.`));
+      await say(repo, issue.number, "developer", `**✅ Merge conflicts resolved** — the PR is mergeable again.`);
       return;
     }
     // Reviewer ALSO wanted changes — fall through to address them on the now-merged branch.
@@ -893,7 +894,7 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
   // ---------------------------------------------------------------------------------------------
   // Address the reviewer's requested changes (full developer → tester → reviewer cycle).
   // ---------------------------------------------------------------------------------------------
-  await commentOnIssue(repo, issue.number, say("developer", `**On it — addressing the review.**`));
+  await say(repo, issue.number, "developer", `**On it — addressing the review.**`);
   const beforeSha = await localHeadSha(workdir);
   const dev = await runRole("developer", {
     workdir,
@@ -914,12 +915,12 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
   const changed = (await localHeadSha(workdir)) !== beforeSha || (await workdirDirty(workdir));
   if (!changed) {
     recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "needsAttention"));
-    await commentOnIssue(repo, issue.number, say("developer", `**No code changes were produced** addressing the review, so I skipped the re-test/re-review to avoid burning tokens. Comment guidance and re-pin, or **Merge anyway**.`));
+    await say(repo, issue.number, "developer", `**No code changes were produced** addressing the review, so I skipped the re-test/re-review to avoid burning tokens. Comment guidance and re-pin, or **Merge anyway**.`);
     return;
   }
 
   const test = await runTests(repo, issue.number, workdir, branch);
-  await commentOnIssue(repo, issue.number, say("tester", `**Re-test after fixes**\n\n${test.text}`));
+  await say(repo, issue.number, "tester", `**Re-test after fixes**\n\n${test.text}`);
 
   const review2 = await runRole("reviewer", {
     workdir,
@@ -931,10 +932,11 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
     ...(getSession(repo, issue.number, "reviewer") ? { resumeSessionId: getSession(repo, issue.number, "reviewer") ?? undefined } : {}),
   });
   recordRun(repo, issue.number, "reviewer", review2.model, review2.turns, "review", review2.costUsd);
-  await commentOnIssue(repo, issue.number, say("reviewer", `**Review (after fix)**\n\n${review2.text}`));
+  await say(repo, issue.number, "reviewer", `**Review (after fix)**\n\n${review2.text}`);
 
   const stillChanges = changesRequested(review2.text);
   recordReview(repo, issue.number, stillChanges ? "changes" : "approved", review2.text);
+  refreshIssueDigest(repo, issue.number); // the say() above upserted BEFORE this verdict landed
   await finalizeWithPr(repo, issue, workdir, branch, stillChanges, !test.verified, test.neededToolchain);
 }
 
@@ -942,11 +944,7 @@ export async function runReviewFix(repo: string, issue: Issue, workdir: string, 
 async function conflictUnresolved(repo: string, issue: Issue, branch: string, why: string, files: string[]): Promise<void> {
   recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "needsAttention"));
   recordConflict(repo, issue.number, "", files); // keep the box visible with whatever files we know
-  await commentOnIssue(
-    repo,
-    issue.number,
-    say("developer", `**⚠️ ${why}** Press **Fix merge conflicts** to try again, or resolve it manually on branch \`${branch}\`.`),
-  ).catch(() => {});
+  await say(repo, issue.number, "developer", `**⚠️ ${why}** Press **Fix merge conflicts** to try again, or resolve it manually on branch \`${branch}\`.`).catch(() => {});
   console.log(`[agency] ${repo} #${issue.number} -> needs-attention (conflict unresolved).`);
 }
 
@@ -956,11 +954,7 @@ export async function runFollowUp(
   workdir: string,
   thread: string,
 ): Promise<void> {
-  await commentOnIssue(
-    repo,
-    issue.number,
-    say("developer", "**On your note — preparing a fix.** Building on a fresh branch off the latest `main`."),
-  );
+  await say(repo, issue.number, "developer", "**On your note — preparing a fix.** Building on a fresh branch off the latest `main`.");
   const planText =
     "FOLLOW-UP: a previous version of this issue was already delivered (and may have been merged). " +
     "Apply the human's latest comment(s) below as the change set. Branch off an up-to-date main so you " +
@@ -1027,7 +1021,7 @@ export async function runDeveloperSolo(repo: string, issue: Issue, workdir: stri
   });
   if (isStopRequested(repo, issue.number)) return; // user stopped — don't open a PR
   recordRun(repo, issue.number, "developer", dev.model, dev.turns, "implement", dev.costUsd);
-  await commentOnIssue(repo, issue.number, say("developer", dev.text));
+  await say(repo, issue.number, "developer", dev.text);
   await finalizeWithPr(repo, issue, workdir, branch, false);
 }
 
@@ -1056,8 +1050,8 @@ export async function runWorkflowEngine(cfg: Config, repo: string, issue: Issue,
   let i = resuming && Number.isFinite(savedCursor) ? Math.min(Math.max(0, savedCursor), Math.max(0, wf.steps.length - 1)) : 0;
   let guard = 0;
   if (!resuming) setSetting(cursorKey, "0");
-  if (!resuming || i === 0) await commentOnIssue(repo, issue.number, say("developer", `🧭 Running workflow **${wf.name}** — ${wf.steps.length} step(s).`));
-  else await commentOnIssue(repo, issue.number, say("developer", `🧭 Resuming workflow **${wf.name}** at step ${i + 1}/${wf.steps.length}.`));
+  if (!resuming || i === 0) await say(repo, issue.number, "developer", `🧭 Running workflow **${wf.name}** — ${wf.steps.length} step(s).`);
+  else await say(repo, issue.number, "developer", `🧭 Resuming workflow **${wf.name}** at step ${i + 1}/${wf.steps.length}.`);
   const wfHookIds = (wf.hooks || []).map(Number).filter((n) => Number.isFinite(n));
   await runStepHooks(wfHookIds, "pre", workdir, repo, issue.number); // workflow-level pre hooks
   while (i < wf.steps.length && guard++ < 30) {
@@ -1086,7 +1080,8 @@ ${skillsPrompt(step.skills)}` : "";
     // awaiting the user's reply (read the flag defensively — it may not exist on AgentDef on this branch).
     const wantsPause = !!(customDef && (customDef as { interactive?: boolean }).interactive);
     const stepHeader = `▶ **Step ${i + 1}/${wf.steps.length}**`;
-    await commentOnIssue(repo, issue.number, stepAuthor ? sayAs(stepAuthor, stepHeader) : say(role, stepHeader));
+    if (stepAuthor) await sayAs(repo, issue.number, stepAuthor, stepHeader);
+    else await say(repo, issue.number, role, stepHeader);
     await runStepHooks(hookIds, "pre", workdir, repo, issue.number);
     let out: Awaited<ReturnType<typeof runRole>>;
     try {
@@ -1111,7 +1106,10 @@ ${thread}` : ""}${skills}`,
     }
     if (isStopRequested(repo, issue.number)) { console.log(`[agency] workflow halted mid-step by Stop ${repo} #${issue.number}`); return; }
     recordRun(repo, issue.number, role, out.model, out.turns, "workflow", out.costUsd);
-    if (out.text.trim()) await commentOnIssue(repo, issue.number, stepAuthor ? sayAs(stepAuthor, out.text) : say(role, out.text));
+    if (out.text.trim()) {
+      if (stepAuthor) await sayAs(repo, issue.number, stepAuthor, out.text);
+      else await say(repo, issue.number, role, out.text);
+    }
     setSetting(cursorKey, String(i + 1)); // step done — resume continues AFTER it
     await runStepHooks(hookIds, "post", workdir, repo, issue.number);
     if (role === "decomposer") { await splitIntoPlanned(repo, issue, out.text).catch(() => {}); return; } // split → planned epics, end this run
@@ -1123,7 +1121,8 @@ ${thread}` : ""}${skills}`,
     // only the final step skips the pause to avoid stranding the workflow.
     if (wantsPause && i + 1 < wf.steps.length) {
       await pause(repo, issue, "awaitingAnswer");
-      await commentOnIssue(repo, issue.number, stepAuthor ? sayAs(stepAuthor, "⏸ Waiting for your reply — answer above and I'll continue.") : say(role, "⏸ Waiting for your reply — answer above and I'll continue."));
+      if (stepAuthor) await sayAs(repo, issue.number, stepAuthor, "⏸ Waiting for your reply — answer above and I'll continue.");
+      else await say(repo, issue.number, role, "⏸ Waiting for your reply — answer above and I'll continue.");
       return;
     }
 
@@ -1132,7 +1131,7 @@ ${thread}` : ""}${skills}`,
     if (gate && (await evalGate(gate.condition, repo, issue, workdir, branch))) {
       if (gate.condition === "humanApproval") {
         recordIssueStatus(repo, issue.number, setBlocked(withStatus("planned"), "awaitingApproval"));
-        await commentOnIssue(repo, issue.number, say(role, "⏸ **Approval needed** to continue — press **Approve** on the dashboard."));
+        await say(repo, issue.number, role, "⏸ **Approval needed** to continue — press **Approve** on the dashboard.");
         return;
       }
       route = gate.route;
@@ -1149,5 +1148,5 @@ ${thread}` : ""}${skills}`,
   setSetting(cursorKey, ""); // workflow finished — clear the cursor so a fresh Start begins at step 1
   await runStepHooks(wfHookIds, "post", workdir, repo, issue.number); // workflow-level post hooks
   recordIssueStatus(repo, issue.number, withStatus("review"));
-  await commentOnIssue(repo, issue.number, say("developer", `✅ Workflow **${wf.name}** complete — ready for your review.`));
+  await say(repo, issue.number, "developer", `✅ Workflow **${wf.name}** complete — ready for your review.`);
 }

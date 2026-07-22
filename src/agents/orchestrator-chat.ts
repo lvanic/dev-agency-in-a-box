@@ -6,7 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appendOrchMsg, listOrchThread, recentIssues, getSession, setSession, recordRun, filesFor, listEpicChildren, recentChanges } from "../store.js";
+import { appendOrchMsg, listOrchThread, recentIssues, getSession, setSession, recordRun, filesFor, listEpicChildren, recentChanges, getIssueDigest, listWatchedRepos } from "../store.js";
 import { activeClaims } from "../locks.js";
 import { resolveChatExec, chatBaseEnv, chatWorkdir } from "./chat.js";
 import { runLLM } from "../runners/exec.js";
@@ -99,7 +99,33 @@ function repoContext(repo: string): string {
   const merged = recentChanges(repo, 10).map((c) => `#${c.number} ${c.title}${c.files.length ? ` — ${c.files.slice(0, 6).map((f) => f.path).join(", ")}` : ""}`);
   const mergedBlock = merged.length ? `\n\nRecently merged (real state — build on these, not on unmerged branches):\n${merged.join("\n")}` : "";
 
-  return recent + liveBlock + epicBlock + ownBlock + mergedBlock;
+  // Per-issue digests (P1, prime-time-plan): a deterministic, no-LLM one-liner upserted on every
+  // run_msg append (state/verdict/files). This is how the Orchestrator "genuinely knows" every run
+  // without re-reading whole GitHub threads — restricted to issues actually in flight or awaiting
+  // review, since a done/planned issue has nothing live to report.
+  const active = all.filter((i) => i.state === "working" || i.state === "review").slice(0, 20);
+  const digestLines = active
+    .map((i) => { const dg = getIssueDigest(i.repo, i.number); return dg ? `#${i.number} ${i.title}: ${dg}` : null; })
+    .filter((l): l is string => Boolean(l));
+  const digestBlock = digestLines.length ? `\n\nRun digests (live, DB-first — no GitHub round-trip):\n${digestLines.join("\n")}` : "";
+
+  // Agency-wide thread ("*"): a per-repo rollup line (one digest per repo, its most active issue) so
+  // the top-level Orchestrator sees every repo's state at a glance instead of one giant issue list.
+  let repoRollupBlock = "";
+  if (repo === AGENCY) {
+    const byRepo = new Map<string, typeof all>();
+    for (const i of all) { const list = byRepo.get(i.repo) ?? []; list.push(i); byRepo.set(i.repo, list); }
+    const watched = new Set(listWatchedRepos());
+    for (const r of watched) if (!byRepo.has(r)) byRepo.set(r, []); // watched-but-idle repos still get a line
+    const lines = [...byRepo.entries()].map(([r, list]) => {
+      const live = list.find((i) => i.state === "working") ?? list[0];
+      const dg = live ? getIssueDigest(r, live.number) : null;
+      return `${r}: ${dg ? `#${live!.number} ${dg}` : list.length ? `${list.length} tracked issue(s), nothing live` : "no runs yet"}`;
+    });
+    repoRollupBlock = lines.length ? `\n\nPer-repo rollup (live digests):\n${lines.join("\n")}` : "";
+  }
+
+  return recent + liveBlock + epicBlock + ownBlock + mergedBlock + digestBlock + repoRollupBlock;
 }
 
 /**

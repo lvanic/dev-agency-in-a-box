@@ -15,9 +15,15 @@ export interface ActivityEvent {
   // "progress" = a live updating meter (e.g. clone %): same-text events REPLACE each other in the
   // UI (one progress bar, not a line per tick) and are NOT persisted — the caller records one
   // final "tool" line when the work completes.
-  kind: "start" | "text" | "tool" | "done" | "delta" | "progress";
+  // "run_msg" = a per-issue run-thread message (pipeline.ts say()/sayAs()) — already durably stored
+  // in `run_msg` by the caller BEFORE this broadcasts, so (unlike the other kinds) it's never also
+  // written to the ephemeral `activity` table here; see pushRunMsg below.
+  kind: "start" | "text" | "tool" | "done" | "delta" | "progress" | "run_msg";
   text: string;
   pct?: number; // 0–100, only on kind "progress"
+  runId?: string; // "run_msg" only — groups messages from the same press-Start/Resume
+  msgId?: number; // "run_msg" only — the run_msg row id, so the client can de-dupe against its initial load
+  isAgency?: boolean; // "run_msg" only — agent (badge-prefixed, avatar) vs. human reply
 }
 
 // Units of work currently running (concurrent → can be several at once).
@@ -76,6 +82,21 @@ export function pushActivity(
 export function subscribe(fn: (e: ActivityEvent) => void): () => void {
   subscribers.add(fn);
   return () => subscribers.delete(fn);
+}
+
+/** Broadcast a run-thread message live over the SAME /events SSE stream as everything else, so the
+ *  Detail run-thread panel needs no polling. The row is already durable (run_msg, written by the
+ *  caller first per ADR-0001), so — unlike pushActivity — this ONLY notifies subscribers; it never
+ *  touches the `activity` table or its bounded in-memory buffer. */
+export function pushRunMsg(msgId: number, repo: string, number: number, runId: string, role: string, text: string, isAgency = true): void {
+  const event: ActivityEvent = { ts: Date.now(), repo, number, role, kind: "run_msg", text, runId, msgId, isAgency };
+  for (const fn of subscribers) {
+    try {
+      fn(event);
+    } catch {
+      /* ignore a bad subscriber */
+    }
+  }
 }
 
 /** Wipe all activity for an issue (the buffer + DB rows). Used by the "reset issue" action. */

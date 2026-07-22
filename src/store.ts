@@ -76,3 +76,6 @@ export { recordLesson, recentLessons, unprocessedLessons, markLessonsProcessed }
 export type { LessonRow } from "./db/lessons.js";
 export { recordActivity, recentActivity, issueActivity } from "./db/activity.js";
 export type { ActivityRow } from "./db/activity.js";
+export { appendRunMsg, listRunThread, hasRunThread, renderBadge } from "./db/run_msgs.js";
+export type { RunMsg } from "./db/run_msgs.js";
+export { buildDigest, upsertIssueDigest, getIssueDigest, refreshIssueDigest } from "./db/issue_digest.js";

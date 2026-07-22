@@ -95,20 +95,24 @@ export function setCommentGhId(id: number, ghId: number, createdAt?: string): vo
   } catch { /* best effort */ }
 }
 
-export function foldInGitHubComment(c: { repo: string; number: number; gh_id: number; author: string; body: string; created_at: string; isAgency: boolean }): void {
+/** Returns true only when this fold inserted a genuinely NEW row — i.e. an inbound comment the DB
+ *  didn't already know about (not a dedup no-op, not an echo-collapse of our own outgoing post).
+ *  Callers use this to decide whether to also push a live SSE event (see tracker.ts syncInComment). */
+export function foldInGitHubComment(c: { repo: string; number: number; gh_id: number; author: string; body: string; created_at: string; isAgency: boolean }): boolean {
   const d = getDb();
-  if (!d || !c.gh_id) return;
+  if (!d || !c.gh_id) return false;
   const body = (c.body || "").trim();
   try {
-    if (d.prepare(`SELECT 1 FROM local_comment WHERE repo = ? AND number = ? AND gh_id = ?`).get(c.repo, c.number, c.gh_id)) return;
+    if (d.prepare(`SELECT 1 FROM local_comment WHERE repo = ? AND number = ? AND gh_id = ?`).get(c.repo, c.number, c.gh_id)) return false;
     const echo = d.prepare(`SELECT id FROM local_comment WHERE repo = ? AND number = ? AND gh_id IS NULL AND body = ? ORDER BY id LIMIT 1`).get(c.repo, c.number, body) as { id?: number } | undefined;
     if (echo?.id) {
       d.prepare(`UPDATE local_comment SET gh_id = ?, created_at = ? WHERE id = ?`).run(c.gh_id, c.created_at || now(), echo.id);
-      return;
+      return false;
     }
     d.prepare(`INSERT INTO local_comment (repo, number, author, body, source, gh_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(c.repo, c.number, c.author || "?", body, c.isAgency ? "agency" : "github", c.gh_id, c.created_at || now());
-  } catch { /* best effort */ }
+    return true;
+  } catch { return false; }
 }
 
 export function updateCommentBody(ghId: number, body: string): void {
