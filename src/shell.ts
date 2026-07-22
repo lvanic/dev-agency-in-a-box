@@ -540,6 +540,12 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .provmodel__id{font-family:var(--mono,ui-monospace,monospace);font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .provmodel__del{width:22px;height:22px;border:none;opacity:0;flex:none}
 .provmodel:hover .provmodel__del{opacity:.7}
+/* P3 (prime-time-plan): per-model $/Mtok price, shown next to each model, editable in place. */
+.provmodel__price{flex:none}
+.provmodel__pricebtn{border:none;background:none;padding:1px 5px;border-radius:5px;font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--ink-3);cursor:pointer;display:flex;align-items:center;gap:3px}
+.provmodel__pricebtn:hover{background:var(--surface);color:var(--ink-2)}
+.provmodel__pricecustom{color:var(--accent,#3b82f6);font-size:14px;line-height:0}
+.provmodel__priceinput{width:70px;font-family:var(--mono,ui-monospace,monospace);font-size:11px;padding:1px 5px;border-radius:5px}
 .rot180{transform:rotate(180deg)}
 .dtoolbar{flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;background:var(--surface);border-bottom:1px solid var(--line);flex-wrap:nowrap;position:relative;z-index:20}
 

@@ -21,15 +21,29 @@ export function ModelsSection({ reload, secretKeys }) {
   const [globalModel, setGlobalModel] = useState(null);
   const [open, setOpen] = useState(""); // expanded provider id
   const [adding, setAdding] = useState(false);
+  // P3 (prime-time-plan): $/Mtok price per model — seed + DB override merged server-side (prices),
+  // plus the raw overrides map so the editable field knows what's a custom value vs. the seed default.
+  const [prices, setPrices] = useState({});
+  const [priceOverrides, setPriceOverrides] = useState({});
   function refresh() {
     getJSON("/models").then((d) => {
       setProvidersState(d.providers || []);
       setAutoSwitch(d.autoSwitchOnLimit || false);
       setChain(d.fallbackChain || []);
       setGlobalModel(d.globalModel || null);
+      setPrices(d.prices || {});
+      setPriceOverrides(d.priceOverrides || {});
     }).catch(() => {});
   }
   useEffect(refresh, []);
+  // Save one model's price override; null clears it back to the seed default. Refetches afterward so
+  // the displayed price is always the server's merged (override-or-seed) value, never guessed client-side.
+  function savePrice(modelId, price) {
+    const nextOverrides = { ...priceOverrides };
+    if (price) nextOverrides[modelId] = price; else delete nextOverrides[modelId];
+    setPriceOverrides(nextOverrides);
+    api("/models", { priceOverrides: { [modelId]: price || null } }).then(() => { saved(); refresh(); }).catch(failed);
+  }
   // Auto-save: any provider-list mutation persists the whole list (the server stores it wholesale).
   function saveProviders(list) {
     setProvidersState(list);
@@ -48,7 +62,7 @@ export function ModelsSection({ reload, secretKeys }) {
   return html`<div>
     <div class="sec">Providers</div>
     <div class="muted" style="font-size:12px;margin-bottom:8px">Every provider — Claude included — carries its full discovered catalog. Tick the models you want offered in pickers; untick to hide. Edits save instantly.</div>
-    ${providers.map((p) => html`<${ProviderCard} key=${p.id} p=${p} open=${open === p.id} onToggle=${() => setOpen(open === p.id ? "" : p.id)} onPatch=${(patch) => patchProvider(p.id, patch)} onRemove=${() => removeProvider(p)} onDiscovered=${refresh}/>`)}
+    ${providers.map((p) => html`<${ProviderCard} key=${p.id} p=${p} open=${open === p.id} onToggle=${() => setOpen(open === p.id ? "" : p.id)} onPatch=${(patch) => patchProvider(p.id, patch)} onRemove=${() => removeProvider(p)} onDiscovered=${refresh} prices=${prices} priceOverrides=${priceOverrides} onPriceChange=${savePrice}/>`)}
     ${!providers.length ? html`<div class="muted" style="font-size:12.5px;padding:8px 2px">No providers yet — add one below (or add a Claude credential under Add provider).</div>` : null}
     ${adding
       ? html`<${AddProvider} existing=${providers} onClose=${() => setAdding(false)} onSaved=${() => { setAdding(false); refresh(); reload(); }}/>`
@@ -73,9 +87,29 @@ export function ModelsSection({ reload, secretKeys }) {
   </div>`;
 }
 
+// P3 (prime-time-plan): inline $/Mtok price for one model — click to edit "in/out", Enter/blur saves,
+// Escape reverts. A dot marks a DB override (vs. the static seed default); clearing the field removes it.
+function PriceField({ modelId, price, override, onChange }) {
+  const [editing, setEditing] = useState(false);
+  const fmt = (pr) => (pr ? `${pr.in}/${pr.out}` : "");
+  const [val, setVal] = useState(fmt(price));
+  useEffect(() => { if (!editing) setVal(fmt(price)); }, [price && price.in, price && price.out, editing]);
+  function commit() {
+    setEditing(false);
+    const m = /^\s*([\d.]+)\s*\/\s*([\d.]+)\s*$/.exec(val);
+    if (!m) { if (!val.trim()) onChange(modelId, null); else setVal(fmt(price)); return; }
+    onChange(modelId, { in: Number(m[1]), out: Number(m[2]) });
+  }
+  return html`<span class="provmodel__price tip" data-tip="$/Mtok in/out — click to edit, blank clears the override" onClick=${(e) => e.stopPropagation()}>
+    ${editing
+      ? html`<input class="provmodel__priceinput" autoFocus value=${val} placeholder="in/out" onInput=${(e) => setVal(e.target.value)} onBlur=${commit} onKeyDown=${(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setVal(fmt(price)); setEditing(false); } }}/>`
+      : html`<button class="provmodel__pricebtn" onClick=${() => setEditing(true)}>${price ? `$${price.in}/${price.out}` : "price?"}${override ? html`<span class="provmodel__pricecustom">•</span>` : ""}</button>`}
+  </span>`;
+}
+
 // One provider row: header (logo, name, active/total counts) + expandable detail with the API key,
 // the model CHECKMARK list (activate/deactivate per model), tier slots, and live re-discovery.
-function ProviderCard({ p, open, onToggle, onPatch, onRemove, onDiscovered }) {
+function ProviderCard({ p, open, onToggle, onPatch, onRemove, onDiscovered, prices, priceOverrides, onPriceChange }) {
   const later = useAutoSave();
   const [discovering, setDiscovering] = useState(false);
   const [newModel, setNewModel] = useState("");
@@ -134,6 +168,7 @@ function ProviderCard({ p, open, onToggle, onPatch, onRemove, onDiscovered }) {
       <div class="provmodels">
         ${models.map((m) => html`<label key=${m} class=${"ckline provmodel" + (isActive(m) ? "" : " off")}>
           <input type="checkbox" checked=${isActive(m)} onChange=${() => toggleModel(m)}/> <span class="provmodel__id">${m}</span>
+          <${PriceField} modelId=${m} price=${(prices || {})[m] || null} override=${Object.prototype.hasOwnProperty.call(priceOverrides || {}, m)} onChange=${onPriceChange}/>
           <button class="iconbtn provmodel__del tip" data-tip="Delete from the list" onClick=${(e) => { e.preventDefault(); onPatch({ models: models.filter((x) => x !== m), ...(active ? { activeModels: active.filter((x) => x !== m) } : {}) }); }}><${Icon} name="x" size=${11}/></button>
         </label>`)}
         ${!models.length ? html`<div class="muted" style="font-size:12px;padding:4px 2px">No models yet — Refresh catalog, or add one below.</div>` : null}

@@ -10,11 +10,12 @@ import { claudeRunEnv } from "../runners/sdk-claude.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
-import { ROLES, modelFor, canonicalModel, type RoleName } from "./roles.js";
+import { ROLES, modelFor, canonicalModel, roleTier, type RoleName } from "./roles.js";
 import { tierModel, getIssueProvider, getIssueAgentModels, parseModelRef, fallbackFor, getIssueUseFallback, type Tier, type Provider } from "../db/providers.js";
+import { resolveTierModel, priceFor } from "./pricing.js";
 import { loadConstitution, loadPersona, loadPlaybooks, loadLearned } from "../memory.js";
-import { pushActivity } from "../activity.js";
-import { recentLessons, recordTokens, recordRunStep, getProviders, getRoleModels, getSessionFallback, setSession, getIssueModelOverride, getGlobalModel, addIssueFiles, getFallbackChain, setRateLimited, isProviderRateLimited } from "../store.js";
+import { pushActivity, getActive, pushRunMsg } from "../activity.js";
+import { recentLessons, recordTokens, recordRunStep, getProviders, getRoleModels, getSessionFallback, setSession, getIssueModelOverride, getGlobalModel, addIssueFiles, getFallbackChain, setRateLimited, isProviderRateLimited, appendRunMsg, renderBadge } from "../store.js";
 import { parseRateLimit, RateLimitedError } from "../ratelimit.js";
 import { addClaimFiles } from "../locks.js";
 import { coordinationContext } from "../coordination.js";
@@ -49,6 +50,21 @@ function parseModelStr(s: string | undefined): { providerId: string; model: stri
 // and env always match the chosen model (the bug: an explicit model used to drop its provider and
 // default to the Claude SDK, so GLM/Gemini runs errored).
 const TIERS: ReadonlySet<string> = new Set(["high", "medium", "low"]);
+
+/**
+ * P3 (prime-time-plan): why the last resolveAssignment() call picked what it picked — a side
+ * channel (not a return-type change, to avoid rippling through resolveAssignment's ~30 call sites)
+ * that `runRole` reads right after resolving the route, to log a `model_decision` run_msg. Only
+ * meaningful for the SAME (role, repo, issueNumber) resolveAssignment was just called with —
+ * runRole re-resolves right before reading it, so it's always fresh for the run it's logging.
+ */
+export interface ModelDecisionInfo {
+  source: "issue-override" | "agent-override" | "explicit-ref" | "tier" | "role-model" | "global-model" | "session-fallback" | "none";
+  tier?: Tier;
+  costAware?: boolean;
+}
+let lastDecision: ModelDecisionInfo | null = null;
+
 function resolveAssignment(role: RoleName, repo: string, issueNumber: number, explicitModel?: string, agentKey?: string): { providerId: string; model: string } | null {
   // 1) The per-issue model override (the detail-view / chatbox / new-issue picker) is HIGHEST
   //    priority: if the user picks a model there it overrides EVERYTHING — per-agent picks, the
@@ -56,28 +72,63 @@ function resolveAssignment(role: RoleName, repo: string, issueNumber: number, ex
   //    (One-shot: cleared after the run.) When it's set we ignore `explicitModel` entirely so a
   //    workflow step can't override the user's deliberate pick.
   const issueOverride = getIssueModelOverride(repo, issueNumber);
-  if (issueOverride?.providerId && issueOverride.model) return { providerId: issueOverride.providerId, model: issueOverride.model };
+  if (issueOverride?.providerId && issueOverride.model) {
+    lastDecision = { source: "issue-override" };
+    return { providerId: issueOverride.providerId, model: issueOverride.model };
+  }
   // 2) PER-AGENT override on the issue (set on the timeline). Key by the custom handle or role.
   const agentModels = getIssueAgentModels(repo, issueNumber);
   const ak = (agentKey || role).toLowerCase();
   const perAgent = parseModelRef(agentModels[ak] || agentModels["@" + ak] || agentModels[role]);
-  if (perAgent) return perAgent;
-  // 3) The step's explicit selection: a TIER keyword resolves against the issue's provider; or a
-  //    concrete "providerId/model" ref; otherwise fall through.
+  if (perAgent) {
+    lastDecision = { source: "agent-override" };
+    return perAgent;
+  }
+  // 3) The step's explicit selection: a TIER keyword resolves — cost-aware (P3): the cheapest priced
+  //    model in that tier on the issue's provider, not just its pinned tier-slot model — against the
+  //    issue's provider; or a concrete "providerId/model" ref; otherwise fall through.
   const issueProvider = getIssueProvider(repo, issueNumber);
   if (explicitModel && TIERS.has(explicitModel.toLowerCase())) {
     const pid = issueProvider || getGlobalModel()?.providerId;
-    if (pid) { const tm = tierModel(pid, explicitModel.toLowerCase() as Tier); if (tm) return tm; }
+    const tier = explicitModel.toLowerCase() as Tier;
+    if (pid) {
+      const tm = resolveTierModel(pid, tier);
+      if (tm) {
+        lastDecision = { source: "tier", tier, costAware: tm.costAware };
+        return { providerId: tm.providerId, model: tm.model };
+      }
+    }
   }
   const fromStr = parseModelStr(explicitModel);
-  if (fromStr) return fromStr;
-  // 4) The issue-wide provider (no explicit tier on the step) → its medium tier as a sane default.
-  if (issueProvider) { const tm = tierModel(issueProvider, "medium"); if (tm) return tm; }
-  // 5) Existing hierarchy: per-role → global → session fallback.
+  if (fromStr) {
+    lastDecision = { source: "explicit-ref" };
+    return fromStr;
+  }
+  // 4) The issue-wide provider (no explicit tier on the step) → this ROLE's capability tier (P3: was
+  //    always hardcoded to "medium" regardless of role) — cost-aware: the cheapest priced model in
+  //    that tier, falling back to the pinned tier-slot model when none is priced.
+  if (issueProvider) {
+    const tier = roleTier(ROLES[role]);
+    const tm = resolveTierModel(issueProvider, tier);
+    if (tm) {
+      lastDecision = { source: "tier", tier, costAware: tm.costAware };
+      return { providerId: tm.providerId, model: tm.model };
+    }
+  }
+  // 5) Existing hierarchy: per-role → global → session fallback. These are explicit, deliberate
+  //    single-model picks (Settings → Models) — cost-aware selection never second-guesses them.
   const a = getRoleModels()[role] ?? getGlobalModel();
-  if (a?.providerId && a.model) return { providerId: a.providerId, model: a.model };
+  if (a?.providerId && a.model) {
+    lastDecision = { source: getRoleModels()[role] ? "role-model" : "global-model" };
+    return { providerId: a.providerId, model: a.model };
+  }
   const fb = getSessionFallback();
-  return fb?.providerId && fb.model ? { providerId: fb.providerId, model: fb.model } : null;
+  if (fb?.providerId && fb.model) {
+    lastDecision = { source: "session-fallback" };
+    return { providerId: fb.providerId, model: fb.model };
+  }
+  lastDecision = { source: "none" };
+  return null;
 }
 function resolveRoute(role: RoleName, repo: string, issueNumber: number, explicitModel?: string, agentKey?: string): { model: string; provider: Provider; authKind: "subscription" | "apiKey" } | null {
   const assignment = resolveAssignment(role, repo, issueNumber, explicitModel, agentKey);
@@ -93,6 +144,59 @@ function resolveRoute(role: RoleName, repo: string, issueNumber: number, explici
   // the provider's own key + endpoint).
   const authKind: "subscription" | "apiKey" = auth === "subscription" ? "subscription" : "apiKey";
   return { model: assignment.model, provider: p!, authKind };
+}
+
+/** Best-effort "which run is this" tag — mirrors pipeline.ts's currentRunId() (kept duplicated, not
+ *  imported: pipeline.ts imports runRole from here, so the reverse import would cycle). Groups this
+ *  decision line under the same run_id every say()/sayAs() message from this press-Start/Resume
+ *  uses, so the run-thread reads as one coherent run. */
+function currentRunId(repo: string, number: number): string {
+  const w = getActive().find((a) => a.repo === repo && a.number === number);
+  return w ? String(w.since) : `adhoc-${Date.now()}`;
+}
+
+/** Human-ish (but still terse/machine-shaped) reason for the model_decision line, from the decision
+ *  info resolveAssignment left behind (see ModelDecisionInfo) plus the model actually resolved. */
+function describeDecision(info: ModelDecisionInfo | null, model: string): string {
+  if (!info) return "no model configured — Claude subscription default";
+  switch (info.source) {
+    case "issue-override":
+      return "explicit per-issue model pick — chatbox/new-issue picker";
+    case "agent-override":
+      return "explicit per-agent override for this issue";
+    case "explicit-ref":
+      return "explicit model ref (workflow step)";
+    case "role-model":
+      return "explicit per-role assignment (Settings → Models)";
+    case "global-model":
+      return "explicit global default (Settings → Models)";
+    case "session-fallback":
+      return "session fallback after a rate limit";
+    case "tier": {
+      if (info.costAware) {
+        const price = priceFor(model);
+        const priceStr = price ? `$${price.out}/M out` : "unpriced";
+        return `cheapest capable (${priceStr}); fresh issue, no override`;
+      }
+      return `no priced alternative in tier — using the pinned ${info.tier ?? ""} model; fresh issue, no override`;
+    }
+    default:
+      return "no explicit model configured — using the default";
+  }
+}
+
+/**
+ * P3 (prime-time-plan): log the model-selection rationale as the FIRST run_msg of this role's run —
+ * appended (and broadcast live) exactly like say()/sayAs() do, so the Detail run-thread panel shows
+ * it inline with the conversation, badge-prefixed by role, without any UI change.
+ */
+function logModelDecision(repo: string, issueNumber: number, role: RoleName, model: string, info: ModelDecisionInfo | null): void {
+  const tier = info?.tier ?? roleTier(ROLES[role]);
+  const reason = describeDecision(info, model);
+  const line = `model=${model} role=${role} tier=${tier} reason="${reason}"`;
+  const runId = currentRunId(repo, issueNumber);
+  const id = appendRunMsg(repo, issueNumber, runId, role, "model_decision", line, { model, role, tier, source: info?.source ?? "none" });
+  pushRunMsg(id, repo, issueNumber, runId, role, `${renderBadge(role)}\n\n${line}`);
 }
 
 // summarizeTool now lives in src/runners/registry.ts (the one shared copy — issue #61).
@@ -302,6 +406,9 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
   pushActivity(repo, issueNumber, role, "start", `started (${model}${input.resumeSessionId ? ", resuming" : ""})`);
 
   const assignment = resolveAssignment(role, repo, issueNumber, input.model, agentKey);
+  // P3 (prime-time-plan): log the selection rationale as the FIRST run_msg of this run — reads
+  // `lastDecision`, the side channel the resolveAssignment() call just above left behind.
+  logModelDecision(repo, issueNumber, role, model, lastDecision);
   const provider = assignment?.providerId ? getProviders().find((x) => x.id === assignment.providerId) : null;
   // Only name "Claude" when a Claude credential actually exists (saved or env). Never invent a
   // phantom provider/endpoint when nothing is configured — that was the hardcoded-Claude leak.

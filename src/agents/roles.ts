@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import type { Tier } from "../db/providers.js";
 
 export const MODELS = {
   haiku: "claude-haiku-4-5-20251001",
@@ -186,6 +187,19 @@ export function modelFor(role: RoleDef): string {
     process.env.AGENT_MODEL?.trim() ||
     role.defaultModel
   );
+}
+
+/**
+ * The capability tier (P3, prime-time-plan) a role's DEFAULT model belongs to — derived from the
+ * existing haiku/sonnet/opus defaultModel choices above (the single source of truth for "how hard
+ * is this role's work"), not a separate table to keep in sync. Used by the cost-aware selection
+ * policy (src/agents/roleAgent.ts) to find the cheapest model that's still capable of this role's
+ * work, instead of always resolving to the pinned tier-slot / default model.
+ */
+export function roleTier(role: RoleDef): Tier {
+  if (role.defaultModel === MODELS.opus) return "high";
+  if (role.defaultModel === MODELS.haiku) return "low";
+  return "medium";
 }
 
 // ---- handle -> role mapping (from config/team.txt: "@handle: role") ----

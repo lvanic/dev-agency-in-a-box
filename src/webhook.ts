@@ -45,6 +45,7 @@ import { discoverProviderModels, ensureClaudeProvider } from "./db/discover.js";
 import { newestModels } from "./db/model-recency.js";
 import { testClaudeAuth, runAnalyzerPrompt } from "./agents/roleAgent.js";
 import { ALL_ROLES } from "./agents/roles.js";
+import { priceFor, getPriceOverrides, setPriceOverride, isValidPrice } from "./agents/pricing.js";
 import { resolveWorkflow } from "./workflow.js";
 import { hasActiveRun, requestHold, queueSteer, peekSteer, isHoldRequested } from "./abort.js";
 import { renderLogin, renderInvite, renderSetup, renderForgot, renderReset } from "./authpages.js";
@@ -684,14 +685,21 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
       if (url === "/models") {
         // Claude gets a real, editable provider row (full anthropic catalog) once a credential exists.
         ensureClaudeProvider(Boolean(claudeToken() || anthropicApiKey()), getProviders, setProviders);
+        const providers = annotateProviders(getProviders());
+        // P3 (prime-time-plan): $/Mtok price for every model across every provider (seed + DB
+        // override merged — see agents/pricing.ts) so Settings → Models can show + edit it inline.
+        const prices: Record<string, { in: number; out: number } | null> = {};
+        for (const p of providers) for (const m of p.models || []) if (!(m in prices)) prices[m] = priceFor(m);
         res.writeHead(200, { "content-type": "application/json" }).end(
           JSON.stringify({
-            providers: annotateProviders(getProviders()),
+            providers,
             roleModels: getRoleModels(),
             globalModel: getGlobalModel(),
             fallbackChain: getFallbackChain(),
             autoSwitchOnLimit: getAutoSwitchOnLimit(),
             roles: ALL_ROLES,
+            prices,
+            priceOverrides: getPriceOverrides(),
           }),
         );
         return;
@@ -1089,7 +1097,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
-        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string } = {};
+        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; priceOverrides?: Record<string, { in?: unknown; out?: unknown } | null>; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string } = {};
         try {
           p = JSON.parse(body.toString("utf8"));
         } catch {
@@ -1604,12 +1612,32 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           return ok();
         }
         if (path === "/models") {
+          // P3: per-model $/Mtok price overrides (Settings → Models). { modelId: {in,out} | null }.
+          // Validate the WHOLE batch before touching anything: an explicit `null` clears an override;
+          // anything else must be a {in,out} pair of finite, non-negative numbers. Malformed input is
+          // a 400 that leaves every existing override (and the rest of this request) untouched — it
+          // must never be silently treated as a clear.
+          if (p.priceOverrides && typeof p.priceOverrides === "object") {
+            for (const [modelId, price] of Object.entries(p.priceOverrides)) {
+              if (price === null) continue; // explicit clear
+              if (!isValidPrice(price)) {
+                return void res.writeHead(400, { "content-type": "application/json" }).end(
+                  JSON.stringify({ error: `Invalid price for "${modelId}" — in/out must both be finite numbers >= 0 (or null to clear).` }),
+                );
+              }
+            }
+          }
           // Save providers, per-role assignments, and fallback chain (live, next run uses them).
           if (Array.isArray(p.providers)) setProviders(p.providers);
           if (p.roleModels && typeof p.roleModels === "object") setRoleModels(p.roleModels);
           if (p.hasOwnProperty("globalModel")) setGlobalModel(p.globalModel ?? null);
           if (Array.isArray(p.fallbackChain)) setFallbackChain(p.fallbackChain);
           if (typeof p.autoSwitchOnLimit === "boolean") setSetting("auto_switch_on_limit", p.autoSwitchOnLimit ? "on" : "off");
+          if (p.priceOverrides && typeof p.priceOverrides === "object") {
+            for (const [modelId, price] of Object.entries(p.priceOverrides)) {
+              setPriceOverride(modelId, price === null ? null : { in: Number(price!.in), out: Number(price!.out) });
+            }
+          }
           return ok();
         }
         if (path === "/discover-models") {

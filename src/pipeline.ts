@@ -23,9 +23,12 @@ import {
   repoBaseBranch,
   localHeadSha,
   workdirDirty,
+  changedFileCount,
 } from "./github.js";
 import { renderEpicTracker } from "./epics.js";
 import { runRole } from "./agents/roleAgent.js";
+import { ROLES, roleTier } from "./agents/roles.js";
+import type { Tier } from "./db/providers.js";
 import { isStopRequested, isHoldRequested } from "./abort.js";
 // True if the user has stopped this issue — every phase checks this before doing ANY work so Stop
 // means "no next agent, no next step, no commit/PR". (runRole has its own guard for the agent run.)
@@ -51,7 +54,7 @@ import { pushActivity, pushRunMsg, setActive, getActive } from "./activity.js";
 import { execSync } from "node:child_process";
 import { runReflection } from "./reflect.js";
 import { runChecks, baselineFailures, parseDiscoveredChecks, rememberChecks } from "./checks.js";
-import { decideNext } from "./orchestrator.js";
+import { decideNext, type ModelHint } from "./orchestrator.js";
 import { withStatus, setBlocked, type BlockedReason } from "./state.js";
 import { TOOLCHAINS, recordToolchainRequest } from "./toolchains.js";
 
@@ -153,6 +156,45 @@ function issueHeader(issue: Issue): string {
 function changesRequested(reviewText: string): boolean {
   const firstLine = reviewText.split("\n").find((l) => l.trim().length > 0) ?? "";
   return /request\s+changes/i.test(firstLine);
+}
+
+/** P3 (prime-time-plan): a purely mechanical review ask (lint/format/nit-level, no logic change) —
+ *  one of the two conservative signals decideNext()'s downshift hint needs. Long or substantive
+ *  feedback (mentions of bugs/logic/security/failures) is NEVER trivial, even if it also mentions
+ *  a keyword below — better to miss a downshift than wrongly cheapen a real fix. */
+function looksTrivialReviewAsk(reviewText: string): boolean {
+  const body = (reviewText || "").replace(/^\s*(APPROVE|REQUEST\s+CHANGES)\s*/i, "").trim();
+  if (!body || body.length > 400) return false;
+  const TRIVIAL = /\b(lint|format(ting)?|whitespace|indent(ation)?|typo|unused import|trailing comma|semicolons?|prettier|eslint)\b/i;
+  const SUBSTANTIVE = /\b(bug|broken|incorrect|logic|security|fails?|crash(es)?|regression|vulnerab)/i;
+  return TRIVIAL.test(body) && !SUBSTANTIVE.test(body);
+}
+
+const TIER_ORDER: Tier[] = ["low", "medium", "high"];
+function shiftTier(t: Tier, dir: 1 | -1): Tier {
+  const i = Math.max(0, TIER_ORDER.indexOf(t));
+  return TIER_ORDER[Math.max(0, Math.min(TIER_ORDER.length - 1, i + dir))];
+}
+
+/** Honor decideNext()'s P3 modelHint for the NEXT revise run: resolves one tier up/down from the
+ *  developer role's base tier and logs the rationale as a `model_decision` run_msg (same shape
+ *  roleAgent.ts's per-run decision line uses). Returns the tier keyword to pass as `runRole`'s
+ *  `model` — which only ever WINS when no explicit per-issue/per-agent override exists (roleAgent's
+ *  resolution checks those first), so this never overrides a deliberate user pick. Returns undefined
+ *  for "same" (or a "escalate"/"downshift" that's already pinned at the tier ceiling/floor) — the
+ *  next revise then uses whatever it would have used anyway.
+ */
+function applyModelHint(repo: string, number: number, hint: ModelHint | undefined): Tier | undefined {
+  if (!hint || hint === "same") return undefined;
+  const base = roleTier(ROLES.developer);
+  const target = shiftTier(base, hint === "escalate" ? 1 : -1);
+  if (target === base) return undefined;
+  const reason = hint === "escalate" ? "escalating after 2 failed review rounds" : "downshifting — last ask was a trivial, single-file fix";
+  const runId = currentRunId(repo, number);
+  const line = `model_hint=${hint} role=developer tier=${target} reason="${reason}"`;
+  const id = appendRunMsg(repo, number, runId, "developer", "model_decision", line, { hint, tier: target });
+  pushRunMsg(id, repo, number, runId, "developer", `${renderBadge("developer")}\n\n${line}`);
+  return target;
 }
 
 /** Best-effort "which run is this" tag: the live-work registry's start time for this issue, so every
@@ -487,10 +529,14 @@ async function build(
   // reviewing broken code, re-test after every revise, and warm the reviewer across its own rounds.
   let testText = test.text, testPass = test.pass, testVerified = test.verified, lastReview = "", round = 0, reviews = 0;
   const maxR = maxReviseRounds();
-  const reviseDev = async (task: string): Promise<boolean> => {
+  // `hintTier` (P3): a tier keyword from applyModelHint() — passed as runRole's `model`, which only
+  // ever wins when no explicit per-issue/per-agent override exists (roleAgent's resolution checks
+  // those first), so an escalate/downshift recommendation never overrides a deliberate user pick.
+  const reviseDev = async (task: string, hintTier?: Tier): Promise<boolean> => {
     const before = await localHeadSha(workdir);
     const revise = await runRole("developer", {
       workdir, repo, issueNumber: issue.number, task,
+      ...(hintTier ? { model: hintTier } : {}),
       // Warm: the developer that wrote the code resumes to fix it.
       ...(getSession(repo, issue.number, "developer") ? { resumeSessionId: getSession(repo, issue.number, "developer") ?? undefined } : {}),
     });
@@ -508,10 +554,14 @@ async function build(
     if (held(repo, issue.number, "build-loop")) return;
     // 1) Tests failing → fix them (errors only) and re-test before spending a review on broken code.
     if (!testPass) {
-      const d = decideNext({ phase: "tested", devChanged: true, testPass: false, round, maxRounds: maxR });
+      // prevRoundFailed (P3): this loop only ever reaches a failing-test decision with round >= 1
+      // after a PRIOR revise round already ran and failed to prevent it (whichever axis triggered
+      // that round) — so round >= 1 here always means the previous round also failed.
+      const d = decideNext({ phase: "tested", devChanged: true, testPass: false, round, maxRounds: maxR, prevRoundFailed: round >= 1 });
       if (d.action !== "revise") { lastReview = "REQUEST CHANGES — tests still failing (out of revise rounds)."; break; }
       round++;
-      const changed = await reviseDev(`Tests are FAILING on branch \`${branch}\`. Fix only what's needed to make them pass, commit and push. Keep the diff focused.\n\n### Failing checks\n${testText}`);
+      const hintTier = applyModelHint(repo, issue.number, d.modelHint);
+      const changed = await reviseDev(`Tests are FAILING on branch \`${branch}\`. Fix only what's needed to make them pass, commit and push. Keep the diff focused.\n\n### Failing checks\n${testText}`, hintTier);
       if (!changed) { lastReview = "REQUEST CHANGES — tests failing and the developer produced no change."; break; }
       await retest("Re-test after fix");
       continue;
@@ -534,12 +584,21 @@ async function build(
     await say(repo, issue.number, "reviewer", `**Review (round ${reviews})**\n\n${review.text}`);
 
     const verdict: "approved" | "changes" = changesRequested(review.text) ? "changes" : "approved";
-    const d = decideNext({ phase: "reviewed", devChanged: true, reviewVerdict: verdict, round, maxRounds: maxR });
+    // filesChanged/trivialFeedback (P3): conservative downshift signals — how big is the diff being
+    // reviewed, and did this review's ask read as purely mechanical. Best-effort; a git error just
+    // leaves filesChanged undefined (never downshifts on missing data).
+    const filesChanged = await changedFileCount(workdir, await repoBaseBranch(repo));
+    const trivialFeedback = verdict === "changes" ? looksTrivialReviewAsk(review.text) : undefined;
+    // prevRoundFailed: same derivation as the test-fail branch above — round >= 1 here always means
+    // a prior revise round already ran and still left the reviewer wanting changes (or a test-fix
+    // revise that got us here, with review now failing for a repeat overall round).
+    const d = decideNext({ phase: "reviewed", devChanged: true, reviewVerdict: verdict, round, maxRounds: maxR, filesChanged, trivialFeedback, prevRoundFailed: round >= 1 });
     if (d.action === "finalize") break;
 
     // 3) Changes requested + rounds left → warm dev addresses them, then re-test and loop.
     round++;
-    const changed = await reviseDev(`The reviewer requested changes on branch \`${branch}\`. Address each point, commit and push. Keep the diff focused.\n\n### Review\n${review.text}`);
+    const hintTier = applyModelHint(repo, issue.number, d.modelHint);
+    const changed = await reviseDev(`The reviewer requested changes on branch \`${branch}\`. Address each point, commit and push. Keep the diff focused.\n\n### Review\n${review.text}`, hintTier);
     if (!changed) break; // no-op → stop (don't re-review identical code)
     await retest("Re-test after fixes");
   }

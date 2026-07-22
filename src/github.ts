@@ -983,6 +983,19 @@ export async function workdirDirty(workdir: string): Promise<boolean> {
   const s = await runGit(workdir, ["status", "--porcelain"]).catch(() => "");
   return s.trim().length > 0;
 }
+/** Number of files touched vs. `base` (the repo's real base branch — pass `repoBaseBranch(repo)`,
+ *  never hardcode "main") — a cheap proxy for "how big is this diff", used (conservatively) by the
+ *  orchestrator's P3 model-hint downshift signal. Returns undefined (NOT 0) on any git error (unknown
+ *  ref, no merge base, …) — decideNext()'s contract is "unknown diff size never downshifts", and a
+ *  bogus 0 would look identical to a genuinely empty, safe-to-downshift diff. */
+export async function changedFileCount(workdir: string, base: string): Promise<number | undefined> {
+  try {
+    const out = await runGit(workdir, ["diff", "--name-only", `${base}...HEAD`]);
+    return out.split("\n").map((s) => s.trim()).filter(Boolean).length;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Current head commit SHA of a branch (cheap API read). Used to cache conflict probes per-SHA. */
 export async function branchHeadSha(repo: string, branch: string): Promise<string> {
