@@ -60,6 +60,8 @@ import { recentFailuresSince } from "./store.js";
 import { effectiveRepos } from "./commands.js";
 import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists, createRepo } from "./github.js";
 import { listAgentFiles, readAgentFile, isSafeAgentPath } from "./memory.js";
+import { listVault, getVaultEntry, upsertVaultEntry, deleteVaultEntry, decodeVaultEntry, listVaultRevisions } from "./store.js";
+import { renderVault, compressToEntries, canonicalLineOf } from "./vaultTranslate.js";
 import { startApp, stopApp, getApp, pickWebDevScript, isTauriPackage, buildLocalCommand } from "./apprun.js";
 import { ensureRepoAccess } from "./commands.js";
 import { previewUrlFor, runChecksNow } from "./preview.js";
@@ -798,6 +800,41 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         return;
       }
 
+      // Central Vault (docs/central-vault-plan.md, Phase 2): list entries for the Settings table, or
+      // fetch one entry's raw canonical line + readable render + revision history.
+      if (url === "/vault") {
+        const entries = listVault().map((r) => ({
+          key: r.key,
+          kind: r.entry.t,
+          scope: r.entry.s,
+          role: r.entry.r ?? "",
+          weight: r.entry.w,
+          updated: r.updated_ts,
+          source: r.source,
+        }));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ entries }));
+        return;
+      }
+      if (url === "/vault-entry") {
+        const q = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
+        const key = q.get("key") ?? "";
+        const row = getVaultEntry(key);
+        if (!row) {
+          res.writeHead(200, { "content-type": "application/json" }).end("{}");
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({
+            key: row.key,
+            raw: canonicalLineOf(row.entry),
+            readable: renderVault([row.entry]),
+            source: row.source,
+            revisions: listVaultRevisions(key, 20),
+          }),
+        );
+        return;
+      }
+
       // PR status for the drawer: review verdict (DB) + live conflict check (one gh read). Lets
       // the action bar choose Fix vs Merge-anyway vs conflict-only without the user reading.
       if (url === "/pr-status") {
@@ -1098,11 +1135,11 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
     }
 
     // Dashboard actions (auth required), not GitHub webhooks.
-    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/app-run", "/app-stop", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
+    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/vault-save", "/vault-delete", "/vault-compress", "/app-run", "/app-stop", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
-        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; priceOverrides?: Record<string, { in?: unknown; out?: unknown } | null>; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string } = {};
+        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; priceOverrides?: Record<string, { in?: unknown; out?: unknown } | null>; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string; raw?: string; text?: string; hints?: string[] } = {};
         try {
           p = JSON.parse(body.toString("utf8"));
         } catch {
@@ -1305,6 +1342,44 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           if (!p.path || !isSafeAgentPath(p.path)) return res.writeHead(400).end("{}");
           deleteAgentOverride(p.path);
           return ok();
+        }
+        // Central Vault (Phase 2). Save one or more canonical lines (raw newline-separated JSON), each
+        // strict-validated + upserted (source human, revision kept). The write-time guard (issue/PR
+        // refs out) applies. Restore-from-history reuses this with the revision's stored line.
+        if (path === "/vault-save") {
+          if (typeof p.raw !== "string" || !p.raw.trim()) return res.writeHead(400).end(JSON.stringify({ error: "empty" }));
+          const lines = p.raw.split("\n").map((l: string) => l.trim()).filter(Boolean);
+          const saved: string[] = [];
+          try {
+            for (const line of lines) {
+              const decoded = decodeVaultEntry(line);
+              if (!decoded) throw new Error(`Not a valid canonical record: ${line.slice(0, 80)}`);
+              const { v: _v, ...input } = decoded;
+              upsertVaultEntry(input, "human");
+              saved.push(decoded.k);
+            }
+          } catch (e) {
+            return res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
+          }
+          return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, saved }));
+        }
+        if (path === "/vault-delete") {
+          if (!p.key || typeof p.key !== "string") return res.writeHead(400).end("{}");
+          deleteVaultEntry(p.key);
+          return ok();
+        }
+        // Compress human prose → proposed canonical entries (cheap model). Returns the lines for the
+        // UI's canonical-diff-before-save; it never stores anything itself.
+        if (path === "/vault-compress") {
+          if (typeof p.text !== "string" || !p.text.trim()) return res.writeHead(400).end(JSON.stringify({ error: "empty" }));
+          try {
+            const hints = Array.isArray(p.hints) ? p.hints.filter((h: unknown) => typeof h === "string") : [];
+            const entries = await compressToEntries(p.text, hints);
+            const lines = entries.map((e) => canonicalLineOf({ v: 1, ...e }));
+            return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ lines }));
+          } catch (e) {
+            return res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
+          }
         }
         if (path === "/approve") {
           // Direct approve: marks it approved + moves it to Working immediately, then builds.

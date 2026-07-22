@@ -529,6 +529,14 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .memtab__revs{max-height:220px;overflow:auto;border-top:1px solid var(--line);margin-top:2px;padding-top:6px}
 .memtab__revrow{display:flex;align-items:center;gap:8px;padding:5px 2px}
 @media(max-width:760px){.memtab{flex-direction:column}.memtab__list{width:100%;max-height:220px}}
+/* Central Vault entry table (Settings → Memory → Vault) */
+.vault-row{display:grid;grid-template-columns:minmax(90px,1.6fr) 52px minmax(70px,1.2fr) 64px 28px minmax(60px,0.9fr);gap:8px;align-items:center;width:100%;text-align:left;padding:5px 8px;border:none;background:none;border-radius:6px;font-size:12px;color:var(--ink-2);cursor:pointer}
+.vault-row:hover{background:var(--surface-2)}
+.vault-row.on{background:var(--surface-2);color:var(--ink-1)}
+.vault-row--head{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);cursor:default;position:sticky;top:0;background:var(--surface)}
+.vault-row--head:hover{background:var(--surface)}
+.vault-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:760px){.vault-row{grid-template-columns:1.4fr 46px 1fr 28px}.vault-row span:nth-child(4),.vault-row span:nth-child(6){display:none}}
 /* Provider cards + model checkmark list */
 .provcard{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:8px}
 .provcard__h{display:flex;align-items:center;gap:8px;width:100%;padding:10px 12px;border:none;background:none;cursor:pointer;font-size:13.5px;color:var(--ink-1)}

@@ -145,10 +145,13 @@ alongside the other `seed*()` steps; guarded by settings flag `vault_migration_v
    `vaultSlice` injection (replacing learned-doc injection) + unscoped-recall routing +
    auto boot migration (deterministic seed, no dark window) + tests (encode/decode strict,
    guard, scope-glob matching, budget cap, upsert+revisions, unscoped routing, migration).
-2. ☐ **Translate tool + UI**: `src/vaultTranslate.ts` (deterministic render, model
-   compress w/ cheapest-capable resolution) + agent tool registration + Settings → Memory
-   Vault group (table, two-tab editor, canonical diff, revisions) + tests (render
-   determinism, compress upsert-by-hint mocked, endpoint validation).
+2. ☑ **Translate tool + UI**: `src/vaultTranslate.ts` (deterministic `renderVault`, cheap-model
+   `compressToEntries`/`explainEntry` w/ tier-low `resolveTierModel` resolution, tolerant
+   `parseCompressOutput`) + `vault_prose` agent tool (`src/agents/vaultTool.ts`, wired in
+   roleAgent) + webhook endpoints (`/vault`, `/vault-entry`, `/vault-save`, `/vault-delete`,
+   `/vault-compress`) + Settings → Memory Vault group (entry table, two-tab Readable/Raw
+   editor, canonical-diff-before-save, revisions, +Add, delete) + tests (render determinism,
+   parse tolerance/dedup). Endpoints smoke-verified live (list/save/guard-reject/detail/UI).
 3. ☐ **Write paths + legacy removal**: librarian fold → vault (compress, scoped);
    upstream hook repoint; re-fold the migration entries via compress for terseness;
    delete learned-doc code paths + docs; tests (fold scoping matrix repo/global/role).

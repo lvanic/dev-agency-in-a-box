@@ -23,6 +23,7 @@ import { coordinationContext } from "../coordination.js";
 import { loadBudget } from "../budget.js";
 import { gitnexusWiring, GITNEXUS_PROMPT } from "../gitnexus.js";
 import { recallWiring, RECALL_PROMPT } from "./recall.js";
+import { vaultToolWiring } from "./vaultTool.js";
 import { claudeToken, anthropicApiKey, ghBotToken, githubIdentity } from "../creds.js";
 import { noreplyEmail } from "../github-oauth.js";
 import { providerAuth } from "./provider-auth.js";
@@ -325,6 +326,9 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
   // The agency's own memory (past plans/lessons/reviews/issues) as an on-demand tool — so the agent
   // can PULL context when stuck instead of us pushing the whole thread into every prompt.
   const rc = recallWiring(input.repo);
+  // The Central Vault's translate tool: renders the durable shared knowledge applicable to this
+  // repo+role as prose on demand (the canonical one-liners are already in the system prompt).
+  const vt = vaultToolWiring(input.repo, role);
   const systemPrompt = (await buildSystemPrompt(role, input.agentDef?.persona, input.repo)) + (gn ? `\n\n${GITNEXUS_PROMPT}` : "") + `\n\n${RECALL_PROMPT}`;
   // Custom-agent tool gate (the single user-facing "Can write code" toggle). A docs-only agent reads
   // anywhere but may write ONLY into the issue's _plan/ folder — enforced by (a) handing it just the
@@ -467,8 +471,8 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
         model,
         provider: route?.provider ?? null,
         authKind: route?.authKind ?? "subscription",
-        allowedTools: [...(customTools ?? def.tools), ...(gn?.tools ?? []), ...rc.tools],
-        mcpServers: { ...(gn?.servers ?? {}), ...rc.servers },
+        allowedTools: [...(customTools ?? def.tools), ...(gn?.tools ?? []), ...rc.tools, ...vt.tools],
+        mcpServers: { ...(gn?.servers ?? {}), ...rc.servers, ...vt.servers },
         env: runEnv,
         systemPrompt: systemPromptFinal,
         abort: abortRun.controller,
