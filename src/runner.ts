@@ -901,7 +901,7 @@ export async function runAuditOn(cfg: Config, repo: string, number: number): Pro
         const issue = await createIssue(
           repo,
           p.title.slice(0, 250),
-          `${p.body}\n\n— _opened by the Dev Agency **Auditor** (tracking #${number}). Review, then ▶ Start to build it._`,
+          `${p.body}\n\n— _opened by the Dev Agency **Auditor** (tracking #${number})._`,
           owner,
         ).catch(() => null);
         if (!issue || !issue.number) continue;

@@ -522,7 +522,7 @@ async function splitIntoPlanned(repo: string, issue: Issue, text: string): Promi
   if (items.length === 0) return 0;
   for (let n = 0; n < items.length; n++) {
     const it = items[n];
-    const body = `${it.body}\n\n— Epic ${n + 1} of ${items.length}, part of #${issue.number}. Created by the 🪓 Decomposer agent; review and press ▶ Start when ready.`;
+    const body = `${it.body}\n\n— Epic ${n + 1} of ${items.length}, part of #${issue.number}. Created by the 🪓 Decomposer agent.`;
     const created = await createIssue(repo, it.title, body);
     if (!created.number) continue;
     addEpicChild(repo, issue.number, created.number, it.title);
@@ -532,7 +532,7 @@ async function splitIntoPlanned(repo: string, issue: Issue, text: string): Promi
     setByAgent(repo, created.number, true); // DB-first marker — the dashboard reads this, not a GitHub label
     recordRun(repo, issue.number, "decomposer", MODELS_NONE, 0, "create-issue");
   }
-  await say(repo, issue.number, "decomposer", `**Split into ${items.length} epic(s)** — created as **Planned** (tagged \`by agent\`). Review each and press ▶ Start to build it; the build then breaks the epic into sub-issues.`);
+  await say(repo, issue.number, "decomposer", `**Split into ${items.length} epic(s)** — created as **Planned** (tagged \`by agent\`). Each one has a **Start** button on its card; starting an epic breaks it into sub-issues.`);
   await upsertTrackerComment(repo, issue.number, renderEpicTracker(listEpicChildren(repo, issue.number))).catch(() => {});
   recordIssueStatus(repo, issue.number, withStatus("review"));
   return items.length;
@@ -805,7 +805,7 @@ async function runDeveloperPipeline(
     proposal = `${decision.body}\n\n---\n\n### 🏛 Technical plan (Architect)\n\n${arch.text}`;
   }
   recordPlan(repo, issue.number, proposal);
-  await say(repo, issue.number, "planner", `**Larger change — quick sign-off?**\n\n${proposal}\n\n---\n\n👉 **👍** (or reply \`ok\`) to build. For changes, just say what to change.`);
+  await say(repo, issue.number, "planner", `**Larger change — quick sign-off?**\n\n${proposal}`);
   await pause(repo, issue, "awaitingApproval");
   console.log(`[agency] ${repo} #${issue.number} -> awaiting approval.`);
 }
@@ -830,7 +830,7 @@ async function runSpecialist(
     if ((getIssueStatus(repo, issue.number).blocked === "awaitingApproval" || planApproved) && (await approved(repo, issue, thread))) {
       const planText = lastPlan(repo, issue.number) ?? "";
       if (await maybeDecompose(repo, issue, planText)) return;
-      await say(repo, issue.number, "planner", "**👍 Plan accepted.** Press **▶ Start** on the dashboard to build it.");
+      await say(repo, issue.number, "planner", "**👍 Plan accepted.**");
       recordIssueStatus(repo, issue.number, withStatus("review"));
       return;
     }
@@ -843,7 +843,7 @@ async function runSpecialist(
     }
     // Post the plan and keep the conversation open — reply to refine, or "ok" to accept.
     recordPlan(repo, issue.number, decision.body);
-    await say(repo, issue.number, "planner", `**Plan**\n\n${decision.body}\n\n---\n\n👉 **👍** (or reply \`ok\`) to accept. For changes, just reply with the change.`);
+    await say(repo, issue.number, "planner", `**Plan**\n\n${decision.body}`);
     recordIssueStatus(repo, issue.number, setBlocked(withStatus("planned"), "awaitingApproval"));
     return;
   }

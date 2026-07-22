@@ -1966,7 +1966,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
               const title = (it.title ?? "").trim();
               if (!title) continue;
               const pos = issues.length > 1 ? `\n\n— Part ${n + 1} of ${issues.length}.` : "";
-              const body = `${(it.scope ?? "").trim()}${pos}\n\nProposed by the 🧭 Orchestrator from a chat. Review and press ▶ Start when ready.`;
+              const body = `${(it.scope ?? "").trim()}${pos}\n\nProposed by the 🧭 Orchestrator from a chat.`;
               const c = await createIssue(repo, title, body, userTok);
               if (!c.number) continue;
               recordIssueStatus(repo, c.number, withStatus("planned"), { title });

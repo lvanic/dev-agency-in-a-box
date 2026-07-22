@@ -26,7 +26,7 @@ function ProposalCard({ repo, proposal, reload, onOpenIssue }) {
     return html`<div class="oprop oprop-done">
       <div class="oprop-h"><${Icon} name="check" size=${15}/> Created ${created.length} issue${created.length > 1 ? "s" : ""} in Planned</div>
       <div class="oprop-created">${created.map((c) => html`<button class="oprop-link" key=${c.number} onClick=${() => onOpenIssue && onOpenIssue(repo, c.number, c.title)}>#${c.number} ${c.title}</button>`)}</div>
-      <div class="oprop-foot">Review each and press ▶ Start in the List when you're ready.</div>
+      <div class="oprop-foot">Open any of them and press <b>Start</b> when you're ready to build.</div>
     </div>`;
   }
   function create() {

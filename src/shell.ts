@@ -602,6 +602,9 @@ input,select,textarea{font-family:inherit;font-size:14px}
 
 .heldbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--amber);background:var(--amber-weak);border-radius:var(--radius);padding:9px 13px;margin-bottom:12px}
 .heldbar__l{display:inline-flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:var(--amber);margin-right:auto}
+.approvebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--green);background:var(--green-weak);border-radius:var(--radius);padding:9px 13px;margin-bottom:12px}
+.approvebar__l{display:inline-flex;align-items:flex-start;gap:7px;font-weight:600;font-size:13px;color:var(--green);margin-right:auto}
+.approvebar__l small{display:block;font-weight:500;font-size:12px;color:var(--ink-2);margin-top:2px}
 .cmt{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:11px 13px;margin-bottom:12px;min-width:0;max-width:100%;overflow:hidden}
 .cmt .h{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2);margin-bottom:7px;text-align:left}
 .cmt .h>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

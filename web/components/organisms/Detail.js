@@ -44,6 +44,9 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
     ? html`<span class="tip" data-tip=${cur.label} style="display:inline-flex"><${ProviderLogo} name=${cur.logo} size=${16}/></span>`
     : html`<span class="tip" data-tip=${"Default model · " + defModelLabel} style="display:inline-flex"><${Icon} name="sparkles" size=${16}/></span>`;
   const agentSelOpts = [{ value: "", label: "Just comment", icon: "messages" }].concat(agentOnlyOptions(data && data.agentDefs));
+  // The picker option that addresses the planner — so when a plan is up for approval a reply is
+  // routed to the Plan agent to REVISE it, not dropped as a bystander comment.
+  const planHandle = (agentSelOpts.find((x) => x.value === "@plan" || x.avatar === "planner" || /^plan/i.test(x.label || "")) || {}).value || "";
   const [pendingComments, setPendingComments] = useState([]); // optimistic skeleton comments
   const [chatAtBottom, setChatAtBottom] = useState(true);
   const [chatAtTop, setChatAtTop] = useState(true);
@@ -115,6 +118,11 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   useEffect(() => {
     setModelOverride(issue.modelOverride ? issue.modelOverride.providerId + "/" + issue.modelOverride.model : "");
   }, [issue.modelOverride?.providerId, issue.modelOverride?.model]);
+  // When a plan is waiting on you, pre-address the composer to the Plan agent so a reply revises the
+  // plan (with the approve bar telling you a reply changes it). Any other state stays "Just comment".
+  useEffect(() => {
+    setReplyAgent(issue.blocked === "awaitingApproval" && planHandle ? planHandle : "");
+  }, [repo, number, issue.blocked, planHandle]);
   useEffect(() => {
     setThread(null); setPr(null); setAppInfo(null); setPendingComments([]); stickRef.current = true;
     if (issue._audit) return; // the audit has no GitHub thread/PR — stream-only view below

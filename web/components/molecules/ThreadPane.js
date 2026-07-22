@@ -27,6 +27,13 @@ export function ThreadPane({
     </div>`;
   })() : null;
 
+  // Plan waiting on you: an inline Approve button (mirrors the PR bar's inline Merge) so the action
+  // is one click, right where the plan is — not buried in the top toolbar. Reply below to change it.
+  const approveBar = issue.blocked === "awaitingApproval" ? html`<div class="approvebar">
+    <span class="approvebar__l"><${Icon} name="check" size=${15}/> <span>Plan ready for you<small>Approve to build it, or reply below to change it.</small></span></span>
+    <button class=${"btn green" + (bz("approve") ? " busy" : "")} disabled=${bz("approve")} onClick=${() => act.approve(repo, number).then(onClose)}>${bz("approve") ? html`<${Spinner} size=${14}/> Approving…` : html`<${Icon} name="check" size=${14}/> Approve & build`}</button>
+  </div>` : null;
+
   const conflictBox = conflict ? html`<div class="conflictbox">
     <div class="conflictbox-h"><${Icon} name="merge" size=${15}/> Merge conflicts with main</div>
     <div class="conflictbox-b">This PR can't be merged until the conflicts are resolved.${conflictFiles.length ? html` ${conflictFiles.length} conflicting file${conflictFiles.length > 1 ? "s" : ""}:` : ""}</div>
@@ -37,6 +44,7 @@ export function ThreadPane({
   return html`<div class="dpane chat" ref=${chatRef} onScroll=${onChatScroll}>
     ${!chatAtTop ? html`<div class="scroll-fab-wrap top"><button class="iconbtn scroll-fab" title="Scroll to top" onClick=${() => { chatRef.current.scrollTop = 0; }}><${Icon} name="chevup" size=${16}/></button></div>` : null}
     ${issue.epic ? html`<${EpicChecklist} epic=${{ ...issue.epic, parent: number }} repo=${repo} onOpen=${onOpenIssue} onClose=${() => act.close(repo, number).then(onClose)} closing=${act.isBusy("close", repo, number)} act=${act} data=${data} onOpenModels=${onOpenModels}/>` : null}
+    ${approveBar}
     ${conflictBox}
     ${issue.blocked === "held" ? html`<div class="heldbar">
       <span class="heldbar__l"><${Icon} name="clock" size=${15}/> Workflow on hold${(issue.steers && issue.steers.length) ? html` · ${issue.steers.length} steer${issue.steers.length > 1 ? "s" : ""} queued` : ""}</span>
