@@ -12,6 +12,8 @@ export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoFi
   const [manual, setManual] = useState("");
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [isPrivate, setIsPrivate] = useState(true);
   useEffect(() => { getJSON("/repos-available").then((d) => setAvail(d.repos || [])).catch(() => setAvail([])); }, []);
   function add(full) {
     if (!full || busy) return;
@@ -22,6 +24,15 @@ export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoFi
   function remove(full) {
     if (busy) return; setBusy(true);
     api("/remove-repo", { repo: full }).then(() => { toast("Removed " + full); if (repoFilter === full && setRepoFilter) setRepoFilter(null); reload(); }).catch(() => toast("Couldn’t remove")).then(() => setBusy(false));
+  }
+  function create() {
+    const nm = newName.trim();
+    if (!nm || busy) return;
+    if (!/^([\w.-]+\/)?[\w.-]+$/.test(nm)) { toast("Repo name, or owner/name"); return; }
+    setBusy(true);
+    api("/create-repo", { name: nm, visibility: isPrivate ? "private" : "public" })
+      .then((r) => { toast("Created " + (r.repo || nm)); setNewName(""); if (setRepoFilter && r.repo) setRepoFilter(r.repo); reload(); })
+      .catch((e) => toast((e && e.message) || "Couldn’t create")).then(() => setBusy(false));
   }
   // Per-repo auto-update toggle (only rendered when showAuto). Green = on, muted = off.
   const rpill = (repo, kind) => { const on = ((autoRepos[repo] || {})[kind] || "") === "on"; const tip = "Auto-" + kind + " — " + (on ? "ON" : "OFF"); return html`<button class=${"apill " + (on ? "on" : "off")} aria-label=${tip} data-tip=${tip} onClick=${(e) => { e.stopPropagation(); setAuto(kind, on ? "off" : "on", repo); }}><${Icon} name=${kind === "resume" ? "refresh" : "merge"} size=${12}/> <span class="apill-label">${kind}</span></button>`; };
@@ -43,6 +54,12 @@ export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoFi
     <div class="repodrop-add">
       <input placeholder="owner/name" value=${manual} onInput=${(e) => setManual(e.target.value)} onKeyDown=${(e) => { if (e.key === "Enter") add(manual.trim()); }}/>
       <button class="btn primary" disabled=${busy} onClick=${() => add(manual.trim())}>Add</button>
+    </div>
+    <div class="dropmenu-h">Create new repo</div>
+    <div class="repodrop-add">
+      <input placeholder="new-repo-name" value=${newName} onInput=${(e) => setNewName(e.target.value)} onKeyDown=${(e) => { if (e.key === "Enter") create(); }}/>
+      <button class=${"apill " + (isPrivate ? "on" : "off")} data-tip=${"Visibility — " + (isPrivate ? "Private" : "Public") + " (click to toggle)"} onClick=${() => setIsPrivate((v) => !v)}><${Icon} name=${isPrivate ? "lock" : "layers"} size=${12}/> <span class="apill-label">${isPrivate ? "Private" : "Public"}</span></button>
+      <button class="btn primary" disabled=${busy} onClick=${create}>Create</button>
     </div>
     ${filterable && (avail || []).length > 6 ? html`<div class="searchrow"><${Icon} name="search" size=${15} cls="searchic"/><input placeholder="Filter your repos…" value=${filter} onInput=${(e) => setFilter(e.target.value)} autocomplete="off"/>${filter ? html`<button class="iconbtn" style="width:30px;height:30px;border:none" onClick=${() => setFilter("")} aria-label="Clear"><${Icon} name="x" size=${15}/></button>` : null}</div>` : null}
     ${avail === null ? html`<div class="dropmenu-empty">Loading your repos…</div>`

@@ -56,7 +56,7 @@ import { listRateLimited } from "./store.js";
 import { getConversation, conversationCount, foldInGitHubComment, recordOutgoingComment, setCommentGhId, updateCommentBody } from "./store.js";
 import { recentFailuresSince } from "./store.js";
 import { effectiveRepos } from "./commands.js";
-import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists } from "./github.js";
+import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists, createRepo } from "./github.js";
 import { listAgentFiles, readAgentFile, isSafeAgentPath } from "./memory.js";
 import { startApp, stopApp, getApp, pickWebDevScript, isTauriPackage, buildLocalCommand } from "./apprun.js";
 import { ensureRepoAccess } from "./commands.js";
@@ -1035,7 +1035,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
-        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean } = {};
+        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string } = {};
         try {
           p = JSON.parse(body.toString("utf8"));
         } catch {
@@ -1740,6 +1740,32 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           } catch (e) {
             return res.writeHead(502).end(JSON.stringify({ error: `Could not reach analyzer: ${(e as Error).message}` }));
           }
+        }
+        if (path === "/create-repo") {
+          // Create a brand-new GitHub repo under the connected account, then watch + index it. Admin
+          // only (it creates real GitHub resources). `--add-readme` (in createRepo) gives it a first
+          // commit so it's immediately clonable — an empty repo has no default branch and can't be
+          // cloned/indexed. This is the "start a fresh project the agency will build" path.
+          if (actor.role !== "admin") return res.writeHead(403).end('{"error":"admin only"}');
+          const nm = (p.name ?? "").trim();
+          if (!/^([\w.-]+\/)?[\w.-]+$/.test(nm)) return res.writeHead(400).end(JSON.stringify({ error: "Use a repo name (or owner/name), letters/digits/-._ only" }));
+          let created: { full_name: string; url: string };
+          try {
+            created = await createRepo(nm, { private: p.visibility !== "public", description: p.description });
+          } catch (e) {
+            const msg = (e as Error).message || "";
+            const friendly = /already exists|name already/i.test(msg)
+              ? `A repo named ${nm} already exists — pick another name or add it via "Add existing".`
+              : /403|permission|forbidden/i.test(msg)
+                ? `The connected GitHub account can't create ${nm} (need repo-create permission / the right owner).`
+                : `Couldn't create ${nm}: ${msg.slice(0, 200)}`;
+            return res.writeHead(400).end(JSON.stringify({ error: friendly }));
+          }
+          try { await ensureRepoAccess(cfg, created.full_name); } catch { /* best effort: webhook/collab */ }
+          addWatchedRepo(created.full_name);
+          ensureRepoIndex(created.full_name);
+          void trigger("dashboard-create-repo");
+          return ok(JSON.stringify({ ok: true, repo: created.full_name, url: created.url }));
         }
         if (path === "/add-repo") {
           // Add a repo to the watch list + invite the bot + register the webhook — live, no redeploy.

@@ -306,9 +306,8 @@ function GithubSection({ secretKeys, github, reload }) {
     <${GitHubConnect} github=${github} reload=${reload}/>
     <button class="btn ghost" style="width:100%;justify-content:center;margin-top:12px" onClick=${() => setAdv((a) => !a)}><${Icon} name=${adv ? "chevdown" : "chevron"} size=${14}/> Advanced — paste tokens manually</button>
     ${adv ? html`<div style="margin-top:10px">
-      <div class="muted" style="font-size:11.5px;margin-bottom:10px">Optional fallback to fine-grained PATs (the OAuth connection above covers both). Stored encrypted; write-only.</div>
-      <div style="margin-bottom:14px"><${SecretField} field=${{ key: "github_bot_token", label: "GitHub bot token", hint: "The account the agency ACTS as — commits & pull requests." }} isSet=${secretKeys.includes("github_bot_token")} reload=${reload}/></div>
-      <div><${SecretField} field=${{ key: "github_user_token", label: "Your GitHub token", hint: "Comment & open issues under YOUR name." }} isSet=${secretKeys.includes("github_user_token")} reload=${reload}/></div>
+      <div class="muted" style="font-size:11.5px;margin-bottom:10px">Optional fallback to a fine-grained PAT if you'd rather not use the OAuth login above. One token covers everything — the agency commits, opens PRs and comments as this account. Stored encrypted; write-only.</div>
+      <div><${SecretField} field=${{ key: "github_bot_token", label: "GitHub token", hint: "The account the agency acts as — commits, pull requests & comments. Needs repo scope." }} isSet=${secretKeys.includes("github_bot_token")} reload=${reload}/></div>
     </div>` : null}
   </div>`;
 }

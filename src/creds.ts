@@ -46,9 +46,20 @@ export function githubIdentity(): { login: string; name: string; id: string } | 
 export function ghBotToken(): string {
   return githubOAuthToken() || adminSecret("github_bot_token") || process.env.GITHUB_TOKEN?.trim() || "";
 }
-/** "Acts as you" owner token. With OAuth the single token is both — falls back to a separate PAT. */
+/**
+ * "Acts as you" owner token. With OAuth the single token is both. For manual-PAT setups we now use
+ * ONE token: fall back to the bot token (and GITHUB_TOKEN) so a single pasted PAT covers both the
+ * "acts as the agency" and "acts as you" roles — no more two confusing token fields.
+ */
 export function ghUserToken(): string {
-  return githubOAuthToken() || adminSecret("github_user_token") || process.env.ADMIN_GITHUB_TOKEN?.trim() || "";
+  return (
+    githubOAuthToken() ||
+    adminSecret("github_user_token") ||
+    adminSecret("github_bot_token") ||
+    process.env.ADMIN_GITHUB_TOKEN?.trim() ||
+    process.env.GITHUB_TOKEN?.trim() ||
+    ""
+  );
 }
 /** Claude subscription token for the Agent SDK (subscription auth). */
 export function claudeToken(): string {

@@ -669,6 +669,26 @@ export async function mergePrForBranch(
   }
 }
 
+/**
+ * Create a new GitHub repo and return its canonical full name + URL. A bare `name` creates under the
+ * connected account; `owner/name` under that owner (needs perms there). `--add-readme` gives it an
+ * initial commit + default branch so the agency can clone and index it right away — a truly empty
+ * repo has no default branch and can't be cloned. Uses the connected OAuth/bot token (needs `repo`
+ * scope). Throws (with gh's stderr) if the name is taken or the token lacks permission.
+ */
+export async function createRepo(
+  name: string,
+  opts: { private?: boolean; description?: string } = {},
+): Promise<{ full_name: string; url: string }> {
+  const args = ["repo", "create", name, opts.private === false ? "--public" : "--private", "--add-readme"];
+  if (opts.description?.trim()) args.push("--description", opts.description.trim());
+  await gh(args); // prints the new repo's URL; non-zero exit (name taken / no perms) surfaces to caller
+  // Resolve canonical owner/name + URL — a bare name resolves against the connected account.
+  const view = await gh(["repo", "view", name, "--json", "nameWithOwner,url"]);
+  const j = JSON.parse(view) as { nameWithOwner: string; url: string };
+  return { full_name: j.nameWithOwner, url: j.url };
+}
+
 /** Create a new issue (used by the planner to decompose work into sub-issues). */
 export async function createIssue(
   repo: string,
