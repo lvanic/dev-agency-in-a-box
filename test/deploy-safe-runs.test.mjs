@@ -19,6 +19,11 @@ const {
 } = await import("../dist/db/deploy.js");
 const { shouldHoldSelfMerge, shouldAutoResumeMarker, flushHeldUpdatesIfQuiet } = await import("../dist/deploySafety.js");
 const { dispatch, poolStatus } = await import("../dist/pool.js");
+const { addEpicChild, listEpicChildren } = await import("../dist/db/epic_tables.js");
+const { mergeEpic } = await import("../dist/epics.js");
+const { maybeTripCircuit } = await import("../dist/github.js");
+const { getIssueStatus, recordIssueStatus } = await import("../dist/store.js");
+const { withStatus } = await import("../dist/state.js");
 
 // ── interrupted_runs marker ──────────────────────────────────────────────────────────────────────
 
@@ -151,4 +156,97 @@ test("flushHeldUpdatesIfQuiet: does not flush while other work is in flight", as
   release();
   await new Promise((r) => setTimeout(r, 20)); // let the pool settle back to idle
   clearHeldUpdate("acme/agency", 101);
+});
+
+// ── mergeEpic routes through attemptSelfMerge (the last self-merge bypass — see PR #199's audit) ──
+
+// Force gh() to short-circuit instead of making a real network call, so this test is deterministic
+// and offline. maybeTripCircuit only opens for a rate-limit-shaped message (see gh-circuit-breaker
+// tests) — this is the same mechanism, just reused as a network stub for a message that never
+// otherwise appears in this file's tests.
+test("mergeEpic (agency's own repo) holds a child merge instead of merging straight through when other work is in flight", async () => {
+  maybeTripCircuit(["issue", "comment"], new Error("API rate limit exceeded for installation ID 1."));
+
+  const repo = "acme/agency", parent = 900, child = 901;
+  addEpicChild(repo, parent, child, "Sub work");
+
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  dispatch("acme/other#1", () => gate); // occupy the pool so attemptSelfMerge's hold path engages
+
+  const cfg = { agencyRepo: repo };
+  const result = await mergeEpic(cfg, repo, parent);
+
+  assert.equal(result.ok, false, "held, not fully merged — the parent can't close until it flushes");
+  assert.equal(result.held, 1, "the held count is a real field callers can branch on, not msg string-matching");
+  assert.match(result.msg, /holding/i);
+  const held = listHeldUpdates().find((h) => h.repo === repo && h.number === child);
+  assert.ok(held, "the child was queued in held_updates instead of merged via mergePrForBranch directly");
+  assert.equal(listEpicChildren(repo, parent)[0].state, "open", "child not marked done while its merge is held");
+
+  release();
+  await new Promise((r) => setTimeout(r, 20)); // let the pool settle back to idle
+  clearHeldUpdate(repo, child);
+});
+
+test("mergeEpic (a non-agency repo) is unaffected by the hold — behaves like a plain merge attempt", async () => {
+  const repo = "acme/app", parent = 910, child = 911; // NOT cfg.agencyRepo
+  addEpicChild(repo, parent, child, "Sub work");
+
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  dispatch("acme/other#2", () => gate); // other work in flight — irrelevant for a non-agency repo
+
+  const cfg = { agencyRepo: "acme/agency" };
+  const result = await mergeEpic(cfg, repo, parent);
+
+  // No hold applies (repo !== cfg.agencyRepo), so attemptSelfMerge falls through to a real
+  // mergePrForBranch attempt — which fails offline (no PR/network), NOT a held queue entry.
+  assert.equal(result.ok, false);
+  assert.equal(result.held, 0, "a non-agency repo is never held");
+  assert.doesNotMatch(result.msg, /holding/i, "a non-agency repo is never held");
+  assert.equal(listHeldUpdates().find((h) => h.repo === repo && h.number === child), undefined);
+
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+// Regression for the webhook.ts /close bug this PR fixes: a held child used to be indistinguishable
+// from a genuinely failed one, so /close fell through to closeIssue+recordIssueStatus("done") on the
+// parent while the child's PR hadn't actually merged. mergeEpic's `held` field is what a caller must
+// branch on instead (see webhook.ts's /close route); this models the full held -> flushed -> retried
+// sequence end to end through mergeEpic itself.
+test("mergeEpic: a held-then-flushed child eventually lets a retried mergeEpic close the parent", async () => {
+  const repo = "acme/agency", parent = 920, child = 921;
+  addEpicChild(repo, parent, child, "Sub work 3");
+
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  dispatch("acme/other#3", () => gate); // occupy the pool so the first call holds
+
+  const cfg = { agencyRepo: repo };
+  const held = await mergeEpic(cfg, repo, parent);
+  assert.equal(held.ok, false);
+  assert.equal(held.held, 1, "child queued, not merged — a caller must NOT close the parent on this result");
+  assert.equal(listEpicChildren(repo, parent)[0].state, "open");
+
+  release();
+  await new Promise((r) => setTimeout(r, 20)); // pool goes quiet
+
+  // Simulate what a real flush (flushHeldUpdatesIfQuiet/"Deploy now", deploySafety.ts) + the next
+  // reconcileEpics scan (epics.ts) do once the held update actually lands: the child issue's DB
+  // status flips to done, its epics-table row is marked done, and the held_updates row clears.
+  // (Exercising the real flush here would require a genuine GitHub merge — out of reach offline.)
+  recordIssueStatus(repo, child, withStatus("done"));
+  const { updateEpicChild } = await import("../dist/db/epic_tables.js");
+  updateEpicChild(repo, parent, child, "done", true);
+  clearHeldUpdate(repo, child);
+
+  // Retried mergeEpic (the human re-clicking Merge/Close once the checklist shows it landed, or the
+  // dashboard auto-retrying): every child is already `childDone`, so the loop merges nothing new and
+  // goes straight to closing the parent — no second hold, no failure.
+  const retried = await mergeEpic(cfg, repo, parent);
+  assert.equal(retried.ok, true, "every child is done now — the parent closes normally");
+  assert.equal(retried.held, 0);
+  assert.equal(getIssueStatus(repo, parent).state, "done", "parent's own DB status flips to done only on this real close");
 });

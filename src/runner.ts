@@ -130,8 +130,6 @@ import { loadBudget, overBudget, effectiveLimits } from "./budget.js";
 import { maybeSelfImprove } from "./reflect.js";
 import { parseLegacyStatus, withStatus, setBlocked, isWaitingOnHuman } from "./state.js";
 import {
-  handleControlCommands,
-  handleMergeCommands,
   effectiveRepos,
   ensureAllRepoAccess,
   recoverOrphans,
@@ -955,12 +953,8 @@ const recentEnough = (iso: string): boolean =>
 
 /** Scan one repo and dispatch all eligible work to the pool (deduped by key). */
 async function scanRepo(cfg: Config, repo: string): Promise<void> {
-  // Quick management commands first (no agent runs).
-  await handleControlCommands(cfg, repo);
-  await handleMergeCommands(cfg, repo);
-
   // While walled off by the usage limit, don't start NEW agent work (it would just fail and
-  // burn attempts). Epics/commands above still run; parked work auto-resumes after the reset.
+  // burn attempts). reconcileEpics below still runs; parked work auto-resumes after the reset.
   const paused = agentsArePaused();
 
   // Pass 1 — issues (any state). One rule: once the agency has touched a thread, a new comment

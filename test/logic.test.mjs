@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { AGENCY_MARKER } from "../dist/github.js";
 import { roleForHandle, loadHandleRoleMap, modelFor, ROLES, MODELS } from "../dist/agents/roles.js";
 import { parsePlannerDecision, isApproval, parseSubIssues } from "../dist/pipeline.js";
-import { parseControlCommand } from "../dist/commands.js";
 import { dispatch, drain } from "../dist/pool.js";
 import { overBudget, loadBudget, effectiveLimits, setIssueBudget } from "../dist/budget.js";
 import { parseLessons } from "../dist/reflect.js";
@@ -315,16 +314,6 @@ test("buildLocalCommand produces a runnable mac script for the branch", () => {
 
 
 
-
-test("parseControlCommand recognizes /add-repo and /list-repos", () => {
-  assert.deepEqual(parseControlCommand("/add-repo my-app", ""), { type: "add-repo", repo: "my-app" });
-  assert.deepEqual(parseControlCommand("please add it", "/add-repo org/app"), {
-    type: "add-repo",
-    repo: "org/app",
-  });
-  assert.deepEqual(parseControlCommand("/list-repos", ""), { type: "list-repos" });
-  assert.equal(parseControlCommand("just a normal issue", "do the thing"), null);
-});
 
 import { canonicalModel } from "../dist/agents/roles.js";
 

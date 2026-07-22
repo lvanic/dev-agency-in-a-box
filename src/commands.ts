@@ -1,42 +1,18 @@
 /**
- * Control commands filed as GitHub issues, so the agency is managed from GitHub with no
- * terminal and no redeploy. File an issue in any watched repo:
- *   /add-repo <name>     -> start watching another repo (owner/name or just name)
- *   /list-repos          -> list the repos currently watched
- * The agency executes the command, comments the result, and closes the issue.
+ * Repo watch-list plumbing + orphan recovery. The dashboard is the only input path (single
+ * routing — see CONTEXT.md/ADR-0001, and ADR-0003 for the earlier removal of the @mention/label
+ * intake system): repos are added/listed from Settings → Repos (webhook.ts's /add-repo route),
+ * not by filing a control-command issue on GitHub. This module now holds what's shared between
+ * that dashboard path and the scan loop: the effective watch list, access provisioning
+ * (collaborator invite + webhook registration), and post-restart orphan recovery.
  */
 import type { Config } from "./config.js";
-import {
-  listAllOpenIssues,
-  listComments,
-  closeIssue,
-  commentOnIssue,
-  repoExists,
-  ensureWebhook,
-  ensureCollaborator,
-  mergePrForBranch,
-  AGENCY_MARKER,
-} from "./github.js";
-import { addWatchedRepo, listWatchedRepos, recordIssueStatus, getIssueStatus } from "./store.js";
+import { listAllOpenIssues, ensureWebhook, ensureCollaborator } from "./github.js";
+import { listWatchedRepos, recordIssueStatus, getIssueStatus } from "./store.js";
 import { pushActivity } from "./activity.js";
 import { withStatus, setBlocked } from "./state.js";
 
-export type ControlCommand = { type: "add-repo"; repo: string } | { type: "list-repos" };
-
-/** Parse a control command from an issue's title/body, or null if it isn't one. */
-export function parseControlCommand(title: string, body: string): ControlCommand | null {
-  const text = `${title}\n${body}`;
-  const add = /(?:^|\n)\s*\/add-repo\s+(\S+)/i.exec(text);
-  if (add) return { type: "add-repo", repo: add[1].trim() };
-  if (/(?:^|\n)\s*\/list-repos\b/i.test(text)) return { type: "list-repos" };
-  return null;
-}
-
-function resolveRepo(raw: string, owner: string): string {
-  return raw.includes("/") ? raw : `${owner}/${raw}`;
-}
-
-/** All repos currently watched: config/repos.txt ∪ the runtime list added via issues. */
+/** All repos currently watched: config/repos.txt ∪ the runtime list added from the dashboard. */
 export function effectiveRepos(cfg: Config): string[] {
   return [...new Set([...cfg.targetRepos, ...listWatchedRepos()])];
 }
@@ -75,32 +51,6 @@ export async function ensureAllRepoAccess(cfg: Config): Promise<void> {
   }
 }
 
-const MERGE_RE = /^\s*(\/merge|merge it|merge|ship it|🚀)\s*$/i;
-
-/**
- * Merge an issue's PR when you comment `/merge` (or `merge`, `ship it`, 🚀) on a `ready` issue.
- * One-line command; the agency squash-merges the linked PR, deletes the branch, closes the issue.
- */
-export async function handleMergeCommands(cfg: Config, repo: string): Promise<void> {
-  for (const i of await listAllOpenIssues(repo)) {
-    if (getIssueStatus(repo, i.number).state !== "review") continue; // only issues whose PR is up (DB truth, not labels)
-    const comments = await listComments(repo, i.number);
-    const last = comments[comments.length - 1];
-    if (!last || last.body.includes(AGENCY_MARKER)) continue; // last word must be yours
-    if (!MERGE_RE.test(last.body)) continue;
-
-    const r = await mergePrForBranch(repo, `agency/issue-${i.number}`);
-    if (r.ok) {
-      await closeIssue(repo, i.number, `🚀 Merged ${r.msg} and closed.`);
-      recordIssueStatus(repo, i.number, withStatus("done"));
-      console.log(`[agency] merged ${repo} #${i.number}`);
-    } else {
-      recordIssueStatus(repo, i.number, setBlocked(withStatus("working"), "needsAttention"));
-      await commentOnIssue(repo, i.number, `⚠️ Couldn't merge: ${r.msg}`);
-    }
-  }
-}
-
 /**
  * Re-queue issues stranded "working" by a restart mid-run. On a fresh process no work is
  * active, so any in-progress issue is orphaned — park it so it's picked up again. Makes
@@ -131,37 +81,5 @@ export async function recoverOrphans(cfg: Config, skip?: Set<string>): Promise<v
     } catch (err) {
       console.error(`[agency] recovery error on ${repo}:`, (err as Error).message);
     }
-  }
-}
-
-/** Scan one repo's open issues for control commands and execute them. */
-export async function handleControlCommands(cfg: Config, repo: string): Promise<void> {
-  const issues = await listAllOpenIssues(repo);
-  for (const issue of issues) {
-    const cmd = parseControlCommand(issue.title, issue.body);
-    if (!cmd) continue;
-
-    if (cmd.type === "list-repos") {
-      const list = effectiveRepos(cfg).map((r) => `- ${r}`).join("\n");
-      await closeIssue(repo, issue.number, `📋 Currently watching:\n\n${list}`);
-      console.log(`[agency] ${repo} #${issue.number}: /list-repos`);
-      continue;
-    }
-
-    // add-repo (an owner/admin action — verify with the owner token, not the bot's)
-    const target = resolveRepo(cmd.repo, cfg.owner);
-    if (!(await repoExists(target, cfg.adminToken ?? cfg.githubToken))) {
-      await closeIssue(
-        repo,
-        issue.number,
-        `⚠️ Could not add \`${target}\` — it doesn't exist or my token has no access.`,
-      );
-      console.log(`[agency] ${repo} #${issue.number}: /add-repo ${target} -> not found`);
-      continue;
-    }
-    addWatchedRepo(target);
-    const access = await ensureRepoAccess(cfg, target);
-    await closeIssue(repo, issue.number, `✅ Now watching \`${target}\`${access}. New issues there land in Inbox on the dashboard.`);
-    console.log(`[agency] ${repo} #${issue.number}: /add-repo ${target} -> watching${access}`);
   }
 }

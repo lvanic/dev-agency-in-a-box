@@ -11,14 +11,15 @@ import { createHash } from "node:crypto";
 import { afterMerge } from "./merge_hooks.js";
 import { rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { Config } from "./config.js";
 import {
   cloneRepo,
   commentOnIssue,
   upsertTrackerComment,
-  mergePrForBranch,
   closeIssue,
   type RecentThread,
 } from "./github.js";
+import { attemptSelfMerge } from "./deploySafety.js";
 import {
   listEpicParents,
   listEpicChildren,
@@ -147,15 +148,41 @@ async function runEpicReview(repo: string, parent: number, children: EpicChild[]
   }
 }
 
-/** `/merge` on an epic parent: merge every child's open PR, then close the parent. */
-export async function mergeEpic(repo: string, parent: number): Promise<{ ok: boolean; msg: string }> {
+export interface MergeEpicResult {
+  ok: boolean;
+  msg: string;
+  /** Count of children queued in the deploy-safe hold, not merged (and not failed). Callers MUST
+   *  check this before treating a falsy `ok` as a genuine failure — see webhook.ts's /close route,
+   *  which used to string-match `msg` and close+mark-done the parent on a held child (bug: the
+   *  parent's bookkeeping said "done" while a child PR hadn't actually landed yet). */
+  held: number;
+}
+
+/**
+ * `/merge` on an epic parent: merge every child's open PR, then close the parent. Routed through
+ * `attemptSelfMerge` (deploySafety.ts) — same as the dashboard's plain `/merge` — so an epic whose
+ * children live in the agency's OWN repo respects the self-merge quiet window instead of merging
+ * straight through and risking a mid-run autodeploy. For any other repo this behaves exactly like
+ * a plain `mergePrForBranch` call.
+ *
+ * A held child is left OPEN in the epics table (not marked done) — reconcileEpics picks it up on
+ * a later scan once the held update actually flushes (flushHeldUpdatesIfQuiet / "Deploy now"
+ * mark the child issue done + closed on GitHub), at which point calling mergeEpic again sees every
+ * child already `childDone` and closes the parent normally.
+ */
+export async function mergeEpic(cfg: Config, repo: string, parent: number): Promise<MergeEpicResult> {
   const children = listEpicChildren(repo, parent);
-  if (children.length === 0) return { ok: false, msg: "not an epic" };
+  if (children.length === 0) return { ok: false, msg: "not an epic", held: 0 };
   const merged: number[] = [];
+  const held: number[] = [];
   const failed: string[] = [];
   for (const c of children) {
     if (childDone(c)) continue;
-    const r = await mergePrForBranch(repo, `agency/issue-${c.child}`);
+    const r = await attemptSelfMerge(cfg, repo, c.child, `agency/issue-${c.child}`);
+    if (r.held) {
+      held.push(c.child); // queued in held_updates; flushed on quiet or via dashboard "Deploy now"
+      continue;
+    }
     if (r.ok) {
       afterMerge(repo, c.child, r.files);
       updateEpicChild(repo, parent, c.child, "done", true);
@@ -164,10 +191,11 @@ export async function mergeEpic(repo: string, parent: number): Promise<{ ok: boo
     }
     else failed.push(`#${c.child}: ${r.msg}`);
   }
-  if (failed.length) return { ok: false, msg: `merged ${merged.length}; could not merge ${failed.join("; ")}` };
+  if (failed.length) return { ok: false, msg: `merged ${merged.length}; could not merge ${failed.join("; ")}`, held: held.length };
+  if (held.length) return { ok: false, msg: `merged ${merged.length}; holding ${held.length} sub-issue(s) for the deploy-safe quiet window`, held: held.length };
   await closeIssue(repo, parent, `🚀 Epic complete — merged all sub-issues (${children.map((c) => `#${c.child}`).join(", ")}).`);
   recordIssueStatus(repo, parent, withStatus("done"));
-  return { ok: true, msg: `merged ${merged.length} sub-issue PR(s)` };
+  return { ok: true, msg: `merged ${merged.length} sub-issue PR(s)`, held: 0 };
 }
 
 /** Is this issue an epic parent? (has recorded children) */

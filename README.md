@@ -2,9 +2,9 @@
 
 A fully autonomous team of AI agents you operate entirely through GitHub issues.
 You write an issue and pin a teammate; the agency plans, asks if it must, waits for your 👍,
-builds on a branch, tests, reviews, and hands you a draft PR. You test locally and say
-"ship it". It runs 24/7 on Coolify (Docker), reacts instantly to webhooks, heals its own
-PRs, learns from every run, and proposes improvements to its own playbooks as PRs.
+builds on a branch, tests, reviews, and hands you a draft PR. You test locally and tap
+**Merge** on the dashboard. It runs 24/7 on Coolify (Docker), reacts instantly to webhooks,
+heals its own PRs, learns from every run, and proposes improvements to its own playbooks as PRs.
 
 **Status (v1.2.0):** mobile-first dashboard (installable PWA, light/dark), multi-user login with
 encrypted per-user credentials, a guided onboarding wizard, kanban with auto-resume/auto-merge,
@@ -62,7 +62,7 @@ tag.** Any later comment re-engages it, even after you've merged and the issue/P
 - **Approve a plan**: 👍 the proposal comment, or reply `ok` (also: `go`, `lgtm`, `yes`, `build it`…).
 - **Change a plan**: just reply with the change — the planner answers with the delta only.
 - **Answer questions**: reply normally; the pipeline resumes on its own.
-- **Merge**: comment `/merge` (or `merge`, `ship it`, 🚀) on an `agency:ready` issue —
+- **Merge**: tap **Merge** on the card in the dashboard (Review column) —
   squash-merges the PR, deletes the branch, closes the issue.
 - **Retrigger an issue**: remove its `agency:*` label — it's picked up again instantly.
 - **Mute an issue**: add the `agency:ignore` label.
@@ -74,14 +74,14 @@ tag.** Any later comment re-engages it, even after you've merged and the issue/P
   then it asks you for a hint).
 - **Test locally**: `./scripts/checkout-issue.sh <owner/repo> <issue-number>`
   (or `git fetch origin && git checkout agency/issue-N`). PRs are draft on purpose —
-  you mark ready / just `/merge`.
+  you mark ready / just tap **Merge** on the dashboard.
 
-### Manage repos from GitHub
+### Manage repos from the dashboard
 
-File an issue in any watched repo:
+Settings → Repos:
 
-- `/add-repo <name | owner/name>` — start watching a repo (bot is auto-invited, webhook auto-registered)
-- `/list-repos` — show what's watched
+- **Add repo** — start watching a repo by `owner/name` (bot is auto-invited, webhook auto-registered)
+- The watched-repos list is right there — no separate "list" step needed
 
 ### About the `@dev` / `@plan` autocomplete
 
@@ -169,7 +169,7 @@ recovery), `GITHUB_WEBHOOK_SECRET` (webhook mode).
 terminal — it wipes the stored (now-undecryptable) secrets + sessions and regenerates the key;
 re-run onboarding afterwards.
 
-Watched repos live in `config/repos.txt` (plus `/add-repo` additions in the DB volume);
+Watched repos live in `config/repos.txt` (plus dashboard **Settings → Repos** additions in the DB volume);
 handles in `config/team.txt`. Local/macOS run: `scripts/setup-macos.sh`, `scripts/run-local.sh`.
 
 ---
@@ -184,7 +184,7 @@ src/
 ├── reflect.ts     librarian lessons + self-improvement PRs
 ├── budget.ts      cost guardrails
 ├── github.ts      gh CLI wrappers, labels, reactions, webhooks, collaborator invites
-├── commands.ts    /add-repo, /merge, orphan recovery
+├── commands.ts    repo watch-list + access provisioning, orphan recovery
 ├── store.ts       SQLite ledger (issues, runs+cost, plans, lessons, activity)
 ├── webhook.ts     event server + dashboard routes (+ safety poll)
 └── dashboard.ts   live status + /history

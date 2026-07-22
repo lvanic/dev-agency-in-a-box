@@ -1323,7 +1323,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // One-tap merge: squash the issue's PR (or, for an epic, all sub-issue PRs).
           if (!repo || !number) return res.writeHead(400).end("{}");
           if (isEpic(repo, number)) {
-            const e = await mergeEpic(repo, number);
+            const e = await mergeEpic(cfg, repo, number);
             return e.ok ? ok() : res.writeHead(409).end(JSON.stringify({ error: e.msg }));
           }
           // Deploy-safe runs: the agency's OWN repo may hold this instead of merging right now if
@@ -1394,9 +1394,15 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           if (!repo || !number) return res.writeHead(400).end("{}");
           try {
             if (isEpic(repo, number)) {
-              const e = await mergeEpic(repo, number); // closes the parent when all children are done
+              const e = await mergeEpic(cfg, repo, number); // closes the parent when all children are done
               if (e.ok) return ok();
-              // some child PR couldn't merge — the user still asked to close, so close the parent.
+              // A held child (deploy-safe quiet window) is NOT a failure — it's queued and will land
+              // on its own. Closing the parent now would mark it "done" while that child's PR hasn't
+              // actually merged. Refuse instead, same as the /merge route (~1327): the human retries
+              // once reconcileEpics has picked up the flushed child (or clicks "Deploy now").
+              if (e.held > 0) return res.writeHead(409).end(JSON.stringify({ error: e.msg }));
+              // A genuine merge failure (conflict, failing checks) — the user still asked to close,
+              // so close the parent anyway.
             }
             await closeIssue(repo, number, "✅ Closed from the dashboard.").catch(() => {});
             recordIssueStatus(repo, number, withStatus("done")); // closed ≠ merged — keep the chip honest
