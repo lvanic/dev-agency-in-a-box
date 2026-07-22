@@ -155,9 +155,8 @@ export function WorkflowBuilder({ data, onClose, reload, onOpenModels }) {
   if (!form) {
     return html`<div class="bld">
       <div class="bld-top">
+        <div class="bld-title"><${Icon} name="layers" size=${16}/> Workflow & agent manager</div>
         <button class="iconbtn" onClick=${onClose} aria-label="Close"><${Icon} name="x" size=${18}/></button>
-        <div class="bld-title">Workflow & agent manager</div>
-        <div style="flex:1"></div>
       </div>
       <div class="bld-listwrap">
         <div class="bld-sec-head"><span>Workflows</span><button class="btn" onClick=${() => open(null)}><${Icon} name="plus" size=${14}/> New workflow</button></div>

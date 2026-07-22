@@ -1011,7 +1011,8 @@ textarea{resize:vertical;min-height:64px}
 .bld{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;animation:bldin .18s ease}
 @keyframes bldin{from{opacity:0}to{opacity:1}}
 .bld-top{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--surface);border-bottom:1px solid var(--line);flex:none}
-.bld-title{font-weight:600;font-size:15px}
+.bld-title{font-weight:600;font-size:15px;display:flex;align-items:center;gap:7px}
+.bld-top .iconbtn{margin-left:auto}
 .bld-name{font-weight:600;font-size:15px;border:none;background:transparent;color:var(--ink);padding:6px 8px;border-radius:8px;min-width:140px}
 .bld-name:hover,.bld-name:focus{background:var(--surface-2);outline:none}
 .bld-trig-edit{display:inline-flex;align-items:center;gap:1px;background:var(--surface-2);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--ink-2)}
