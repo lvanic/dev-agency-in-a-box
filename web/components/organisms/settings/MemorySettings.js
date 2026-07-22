@@ -16,7 +16,7 @@ const GROUPS = [
   { k: "core", label: "Core" },
   { k: "persona", label: "Personas" },
   { k: "playbook", label: "Playbooks" },
-  { k: "learning", label: "Learned" },
+  // "Learned" docs were retired — self-improving knowledge lives in the Vault group below.
 ];
 
 function timeAgo(iso) {

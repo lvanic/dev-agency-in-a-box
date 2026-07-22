@@ -169,6 +169,25 @@ export function deleteAgentOverride(path: string): void {
   if (pristine != null) queueDiskSync(path, pristine);
 }
 
+/**
+ * Hard-purge every DB trace of a path — the live override, its full revision history, and the
+ * pristine-default snapshot — WITHOUT the disk mirror that deleteAgentOverride does. Used to retire
+ * the legacy learned docs (docs/central-vault-plan.md Phase 3): those rows are dead data now
+ * (nothing reads or lists them), so this just removes them rather than "reverting" to a default that
+ * no longer means anything. Best-effort.
+ */
+export function purgeAgentOverride(path: string): void {
+  const d = getDb();
+  if (!d) return;
+  try {
+    d.prepare(`DELETE FROM agent_overrides WHERE path = ?`).run(path);
+    d.prepare(`DELETE FROM agent_revisions WHERE path = ?`).run(path);
+    d.prepare(`DELETE FROM agent_defaults WHERE path = ?`).run(path);
+  } catch {
+    /* best effort */
+  }
+}
+
 export function listAgentOverridePaths(): string[] {
   const d = getDb();
   if (!d) return [];

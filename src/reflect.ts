@@ -5,28 +5,31 @@
  *      and distills 0–3 reusable lessons into SQLite. Recent lessons are injected into every
  *      agent's system prompt, so the agency immediately benefits.
  *
- *   2. IMPROVE (when enough lessons pile up): a librarian agent folds the accumulated lessons
- *      into the LEARNING part of the agents — the DB-backed "Learned (shared)" doc that's
- *      injected into every agent. This applies live (no redeploy) and every change is kept in
- *      the agent_revisions history (auditable + revertible). The self-improvement loop only
- *      ever touches the LEARNING part — the FIXED persona/playbooks/constitution are user-only.
+ *   2. IMPROVE (when enough lessons pile up): the accumulated lessons are folded into the CENTRAL
+ *      VAULT — compressed (cheap model) into canonical entries, scoped generic→global / else the
+ *      lesson's own repo, role-tagged when the librarian tagged them. This applies live (the vault
+ *      is injected into every agent) and every write is kept in vault_revisions (auditable +
+ *      revertible). The FIXED persona/playbooks/constitution are user-only and never touched.
+ *      (This replaced the retired per-agent "Learned" markdown docs — see docs/central-vault-plan.md.)
  */
 import type { Config } from "./config.js";
 import { runRole } from "./agents/roleAgent.js";
 import { ROLES, type RoleName } from "./agents/roles.js";
-import { readAgentFile, SHARED_LEARNED_PATH, roleLearnedPath } from "./memory.js";
 import {
   recordLesson,
   recordRun,
   unprocessedLessons,
   markLessonsProcessed,
-  setAgentOverride,
+  upsertVaultEntry,
+  listVault,
   type LessonRow,
+  type VaultEntry,
 } from "./store.js";
 import { setActive, clearActive } from "./activity.js";
 import { dispatch } from "./pool.js";
 import { sNum } from "./settings.js";
-import { maybeContributeLearnedUpstream } from "./upstream.js";
+import { maybeContributeLearnedUpstream, looksGeneric } from "./upstream.js";
+import { compressToEntries, renderVault } from "./vaultTranslate.js";
 
 /** Parse the librarian's reply: "LESSONS:\n- ..." or "NOTHING". Exported for tests. */
 export function parseLessons(text: string): string[] {
@@ -96,14 +99,13 @@ export async function runReflection(
 }
 
 /**
- * Decide which lesson ids are safe to mark processed after a self-improve pass: everything
- * EXCEPT lessons whose role-specific fold failed. Every lesson (tagged or not) already fed the
- * shared doc by this point — this only gates the ADDITIONAL per-role fold, so a role-tagged
- * lesson whose role fold failed stays queued and gets retried next cycle instead of being lost.
+ * Decide which lesson ids are safe to mark processed after a self-improve pass: everything EXCEPT
+ * lessons whose vault fold failed (their bucket compressed to nothing, threw, or every proposed entry
+ * was rejected). A failed lesson stays queued and is retried next cycle instead of being lost silently.
  * Exported for tests.
  */
-export function lessonsToMarkProcessed(lessons: LessonRow[], failedRoleLessonIds: Set<number>): number[] {
-  return lessons.filter((l) => !failedRoleLessonIds.has(l.id)).map((l) => l.id);
+export function lessonsToMarkProcessed(lessons: LessonRow[], failedIds: Set<number>): number[] {
+  return lessons.filter((l) => !failedIds.has(l.id)).map((l) => l.id);
 }
 
 const lessonsPrThreshold = (): number => sNum("lessons_pr_threshold", "LESSONS_PR_THRESHOLD", 5);
@@ -122,97 +124,93 @@ export function maybeSelfImprove(cfg: Config): void {
   dispatch(`self#improve`, () => selfImprove(cfg, lessons));
 }
 
+/**
+ * Bucket lessons for the vault fold by (scope, role) — the policy that decides where each lesson lands.
+ * Scope: a GENERIC lesson (looksGeneric — names no watched product repo) becomes global "*"; anything
+ * else is scoped to the lesson's own "owner/repo". Role: the tag the librarian already applied at record
+ * time (splitLessonRole), when it's a known role. Same (scope, role) → one bucket (compressed together).
+ * Pure + exported for tests — the scoping matrix is the testable heart of the fold; compress is the LLM.
+ */
+export interface LessonBucket { scope: string; role: string | null; lessons: LessonRow[] }
+export function bucketLessonsForVault(lessons: LessonRow[], cfg: Config): LessonBucket[] {
+  const buckets = new Map<string, LessonBucket>();
+  for (const l of lessons) {
+    const scope = looksGeneric(l.lesson, cfg) ? "*" : l.repo;
+    const role = l.role && ROLE_NAMES.has(l.role) ? l.role : null;
+    const bkey = `${scope}|${role ?? ""}`;
+    const b = buckets.get(bkey) ?? { scope, role, lessons: [] };
+    b.lessons.push(l);
+    buckets.set(bkey, b);
+  }
+  return [...buckets.values()];
+}
+
 async function selfImprove(cfg: Config, lessons: LessonRow[]): Promise<void> {
   improving = true;
   const repo = cfg.agencyRepo;
-  console.log(`[agency] self-improvement: folding ${lessons.length} lessons into the Learned doc`);
+  console.log(`[agency] self-improvement: folding ${lessons.length} lesson(s) into the vault`);
   setActive(repo, 0, "issue", "librarian", `self-improvement (${lessons.length} lessons)`);
   try {
-    const current = (await readAgentFile(SHARED_LEARNED_PATH)) || "";
-    const list = lessons.map((l) => `- (${l.repo}#${l.number}) ${l.lesson}`).join("\n");
-    const res = await runRole("librarian", {
-      workdir: process.cwd(),
-      repo,
-      issueNumber: 0,
-      task:
-        `Maintain our LEARNED playbook — durable, reusable, cross-project guidance distilled from real runs, ` +
-        `injected into every agent. Fold the new lessons into the current doc: merge related points, dedupe, ` +
-        `organise by theme, and DROP anything noisy, one-off, or already covered by our fixed playbooks. ` +
-        `Keep it tight.\n\n### Current LEARNED playbook\n${current || "(empty)"}\n\n### New lessons\n${list}\n\n` +
-        `Output ONLY the complete updated LEARNED playbook as markdown — no preamble, no commentary.`,
-    });
-    const content = res.text.trim();
-    recordRun(repo, 0, "librarian", res.model, res.turns, "self-improve", res.costUsd);
-    if (content) {
-      // Live + versioned: applies on the next agent run, history kept in agent_revisions.
-      setAgentOverride(SHARED_LEARNED_PATH, content, "self-improve", `folded ${lessons.length} lessons`);
-      console.log(`[agency] self-improvement: Learned doc updated (+${lessons.length} lessons, live)`);
-      // Controlled upstream-contribution channel (P5): offer the same fold to the upstream project
-      // too, IF it's generic and the channel is on — gated entirely inside this call (no-op
-      // otherwise). Never blocks or affects the local apply above, which has already happened.
-      void maybeContributeLearnedUpstream(cfg, {
-        label: "Learned (shared)",
-        content,
-        sourceLessons: lessons.map((l) => l.lesson),
-      });
+    // Each bucket is compressed TOGETHER (one cheap-model call per bucket, not per lesson) into canonical
+    // vault entries; WE set s/r from the bucket so scoping stays policy-controlled — the model only
+    // shapes the key/kind/content.
+    const buckets = bucketLessonsForVault(lessons, cfg);
 
-      // Per-role fold: lessons the librarian tagged with a specific role ALSO fold into that
-      // role's own learned doc (central/agents/<role>.learned.md). This is what makes the
-      // per-role read path (loadLearned → roleLearnedPath, read every run in roleAgent.ts) live —
-      // previously nothing ever wrote it.
-      const byRole = new Map<string, LessonRow[]>();
-      for (const l of lessons) {
-        if (l.role && ROLE_NAMES.has(l.role)) {
-          const arr = byRole.get(l.role) ?? [];
-          arr.push(l);
-          byRole.set(l.role, arr);
+    // Existing keys are passed as compress hints so a lesson that refines a known fact upserts its entry
+    // instead of duplicating it. Grown as we go so entries added this pass also dedupe within the pass.
+    const existingKeys = listVault().map((r) => r.key);
+    const failed = new Set<number>();
+    const globalEntries: VaultEntry[] = []; // the generic (scope "*") additions — offered upstream below
+    const globalLessons: string[] = [];
+
+    for (const b of buckets) {
+      try {
+        const text = b.lessons.map((l) => `- ${l.lesson}`).join("\n");
+        const proposed = await compressToEntries(text, existingKeys);
+        if (!proposed.length) {
+          console.warn(`[agency] self-improvement: bucket [${b.scope}] compressed to nothing — its lessons stay queued.`);
+          for (const l of b.lessons) failed.add(l.id);
+          continue;
         }
-      }
-      // Lessons whose role-specific fold fails must NOT be marked processed — they'd be silently
-      // lost forever instead of retried next cycle (they've already served the shared doc above,
-      // but their role-specific half of the job is still outstanding).
-      const failedRoleLessonIds = new Set<number>();
-      for (const [role, roleLessons] of byRole) {
-        const path = roleLearnedPath(role);
-        try {
-          const roleCurrent = (await readAgentFile(path)) || "";
-          const roleList = roleLessons.map((l) => `- (${l.repo}#${l.number}) ${l.lesson}`).join("\n");
-          const roleRes = await runRole("librarian", {
-            workdir: process.cwd(),
-            repo,
-            issueNumber: 0,
-            task:
-              `Maintain the ${role}'s OWN learned notes — durable guidance specific to the ${role} role only ` +
-              `(not the shared playbook, which is maintained separately). Fold the new lessons into the ` +
-              `current doc: merge related points, dedupe, and DROP anything noisy or one-off. Keep it tight.\n\n` +
-              `### Current ${role}.learned.md\n${roleCurrent || "(empty)"}\n\n### New lessons for ${role}\n${roleList}\n\n` +
-              `Output ONLY the complete updated markdown — no preamble, no commentary.`,
-          });
-          recordRun(repo, 0, "librarian", roleRes.model, roleRes.turns, "self-improve", roleRes.costUsd);
-          const roleContent = roleRes.text.trim();
-          if (roleContent) {
-            setAgentOverride(path, roleContent, "self-improve", `folded ${roleLessons.length} ${role} lesson(s)`);
-            console.log(`[agency] self-improvement: ${role}.learned.md updated (+${roleLessons.length} lessons, live)`);
-            void maybeContributeLearnedUpstream(cfg, {
-              label: `${role}.learned`,
-              content: roleContent,
-              sourceLessons: roleLessons.map((l) => l.lesson),
-            });
-          } else {
-            console.warn(`[agency] self-improvement: ${role} fold produced no content — its lessons stay queued.`);
-            for (const l of roleLessons) failedRoleLessonIds.add(l.id);
+        let stored = 0;
+        for (const e of proposed) {
+          // Override scope/role with the bucket's policy value; keep the model's key/kind/content/weight.
+          const input = { k: e.k, t: e.t, s: b.scope, c: e.c, w: e.w, ...(b.role ? { r: b.role } : {}) };
+          try {
+            const saved = upsertVaultEntry(input, "librarian");
+            existingKeys.push(saved.k);
+            if (b.scope === "*") globalEntries.push(saved);
+            stored++;
+          } catch (err) {
+            // Guard rejection (e.g. an issue ref slipped into c) — drop that entry, keep the rest.
+            console.warn(`[agency] self-improvement: dropped a vault entry:`, (err as Error).message);
           }
-        } catch (err) {
-          console.warn(`[agency] self-improvement: ${role} fold skipped:`, (err as Error).message);
-          for (const l of roleLessons) failedRoleLessonIds.add(l.id);
         }
+        if (!stored) { for (const l of b.lessons) failed.add(l.id); continue; }
+        if (b.scope === "*") globalLessons.push(...b.lessons.map((l) => l.lesson));
+        console.log(
+          `[agency] self-improvement: folded ${b.lessons.length} lesson(s) → ${stored} vault entr${stored === 1 ? "y" : "ies"} ` +
+            `[scope ${b.scope}${b.role ? `, role ${b.role}` : ""}]`,
+        );
+      } catch (err) {
+        console.warn(`[agency] self-improvement: bucket [${b.scope}] fold skipped:`, (err as Error).message);
+        for (const l of b.lessons) failed.add(l.id);
       }
-
-      const toMark = lessonsToMarkProcessed(lessons, failedRoleLessonIds);
-      if (toMark.length) markLessonsProcessed(toMark);
-    } else {
-      console.warn("[agency] self-improvement produced no content — lessons stay queued.");
     }
+
+    // Upstream contribution (P5), REPOINTED from the retired _learned.md fold: the GENERIC (global) vault
+    // additions become the upstream draft-PR payload as RENDERED markdown (not raw shorthand). looksGeneric
+    // is re-checked inside the call; a no-op when the channel is off. Never blocks the local fold above.
+    if (globalEntries.length) {
+      void maybeContributeLearnedUpstream(cfg, {
+        label: "vault (shared)",
+        content: renderVault(globalEntries),
+        sourceLessons: globalLessons,
+      });
+    }
+
+    const toMark = lessonsToMarkProcessed(lessons, failed);
+    if (toMark.length) markLessonsProcessed(toMark);
   } catch (err) {
     console.error("[agency] self-improvement failed:", (err as Error).message);
   } finally {

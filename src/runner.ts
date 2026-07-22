@@ -128,7 +128,7 @@ import { pruneEphemeral } from "./db/connection.js";
 import { dispatch, drain, stop as stopPool, poolStatus, inFlightKeys } from "./pool.js";
 import { loadBudget, overBudget, effectiveLimits } from "./budget.js";
 import { maybeSelfImprove } from "./reflect.js";
-import { migrateLearnedToVault } from "./vault.js";
+import { migrateLearnedToVault, purgeLegacyLearnedOverrides } from "./vault.js";
 import { parseLegacyStatus, withStatus, setBlocked, isWaitingOnHuman } from "./state.js";
 import {
   effectiveRepos,
@@ -1430,8 +1430,9 @@ async function main(): Promise<void> {
   seedLibrary(); // skills + hooks: seed the baseline library (idempotent — only when empty)
   // Central Vault: seed it from the legacy learned docs on the FIRST boot after this deploy, so the
   // switch of prompt injection from learned-docs to the vault (roleAgent.ts) leaves no gap. Guarded +
-  // run-once (settings flag); deterministic, no LLM. Best-effort — never blocks boot.
-  void migrateLearnedToVault();
+  // run-once (settings flag); deterministic, no LLM. Best-effort — never blocks boot. THEN purge the
+  // now-dead legacy learned-doc DB overrides (Phase 3) — ordered after the migration reads them.
+  void migrateLearnedToVault().then(() => purgeLegacyLearnedOverrides());
   resetAdminPassword(); // forgot-password recovery via RESET_ADMIN_PASSWORD env (no-op if unset)
   startAutoResume(cfg);
   startAutoMode(cfg);

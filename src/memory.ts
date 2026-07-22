@@ -55,34 +55,18 @@ export async function loadPersona(role: string): Promise<string> {
   return readWithOverride(`central/agents/${role}.md`);
 }
 
-/** Paths of the LEARNING (self-improvable) docs: a shared one + a per-role one. */
-export const SHARED_LEARNED_PATH = "central/playbooks/_learned.md";
-export const roleLearnedPath = (role: string): string => `central/agents/${role}.learned.md`;
-
-/**
- * The LEARNING part of an agent: the shared learned playbook plus this role's own learned notes.
- * These are what the self-improvement loop edits (and you can too); the persona/playbooks are the
- * FIXED part it must never touch.
- */
-export async function loadLearned(role: string): Promise<string> {
-  const [shared, mine] = await Promise.all([
-    readWithOverride(SHARED_LEARNED_PATH),
-    readWithOverride(roleLearnedPath(role)),
-  ]);
-  return [shared, mine].filter((s) => s.trim()).join("\n\n");
-}
-
 // ---- editable agent memory (for the dashboard editor) ----
 
 export interface AgentFile {
   path: string; // relative under memory/, e.g. "central/agents/developer.md"
   label: string;
-  // "fixed" parts are user-only; "learning" parts the self-improvement loop can also edit.
-  group: "core" | "persona" | "playbook" | "learning";
+  // These are the FIXED, user-only parts. Self-improving knowledge now lives in the Central Vault
+  // (docs/central-vault-plan.md), not per-agent "Learned" markdown docs — those were retired.
+  group: "core" | "persona" | "playbook";
   edited: boolean; // has a live override (vs the on-disk default)
 }
 
-/** List the markdown that defines the agents: FIXED parts + LEARNING parts. */
+/** List the markdown that defines the agents: the FIXED parts (constitution, personas, playbooks). */
 export async function listAgentFiles(): Promise<AgentFile[]> {
   const overridden = new Set(listAgentOverridePaths());
   const mk = (path: string, label: string, group: AgentFile["group"]): AgentFile => ({
@@ -92,17 +76,13 @@ export async function listAgentFiles(): Promise<AgentFile[]> {
     edited: overridden.has(path),
   });
   const out: AgentFile[] = [mk("central/CONSTITUTION.md", "Constitution", "core")];
-  // The shared learning doc (self-improving) sits at the top with the core.
-  out.push(mk(SHARED_LEARNED_PATH, "Learned (shared)", "learning"));
 
   try {
     const personas = (await readdir(join(memoryRoot, "central", "agents")))
-      .filter((f) => f.endsWith(".md") && !f.endsWith(".learned.md"))
+      .filter((f) => f.endsWith(".md") && !f.endsWith(".learned.md")) // skip any leftover legacy learned docs
       .sort();
     for (const f of personas) {
-      const role = f.replace(/\.md$/, "");
-      out.push(mk(`central/agents/${f}`, role, "persona")); // fixed
-      out.push(mk(roleLearnedPath(role), `${role} — learned`, "learning")); // self-improvable
+      out.push(mk(`central/agents/${f}`, f.replace(/\.md$/, ""), "persona"));
     }
   } catch {
     /* ignore */

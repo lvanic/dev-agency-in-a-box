@@ -102,14 +102,17 @@ Two directions; it is a tool (exposed to agents AND the UI), not a formatter:
 
 ## Write paths
 
-- **Librarian fold** (`src/reflect.ts` `selfImprove`) — **Phase 3**: unprocessed lessons →,
-  per lesson, compress into a vault entry: repo-specific lesson → `s:"owner/repo"`; generic
-  (reuse the `looksGeneric` gate from `src/upstream.ts`) → `s:"*"`; role-tagged (existing
-  `splitLessonRole`) → sets `r`. Dedupe by key: compress() gets existing keys as hints;
-  same-key results upsert (revision preserved). The learned-doc fold paths are deleted.
-- **Upstream contribution hook** (P5/#191) — **Phase 3**: repoint — a NEW global (`s:"*"`)
-  vault entry that passes `looksGeneric` on its rendered form becomes the upstream draft-PR
-  payload (rendered markdown, not raw shorthand) instead of the retired `_learned.md` fold.
+- ☑ **Librarian fold** (`src/reflect.ts` `selfImprove`) — **Phase 3**: unprocessed lessons are
+  bucketed by (scope, role) via the pure `bucketLessonsForVault` (generic per `looksGeneric` →
+  `s:"*"`; else the lesson's own `s:"owner/repo"`; `splitLessonRole` tag → `r`), each bucket
+  compressed TOGETHER into canonical entries (WE set s/r; the model shapes k/t/c/w). Dedupe by
+  key: compress() gets existing vault keys as hints; same-key results upsert (revision preserved).
+  A bucket that compresses to nothing / throws leaves its lessons queued for retry. The old
+  learned-doc fold (shared + per-role `setAgentOverride`) is deleted.
+- ☑ **Upstream contribution hook** (P5/#191) — **Phase 3**: repointed — the GENERIC (`s:"*"`) vault
+  additions of a fold become the upstream draft-PR payload as `renderVault()` markdown (not raw
+  shorthand), via the unchanged `maybeContributeLearnedUpstream` (re-checks `looksGeneric`), instead
+  of the retired `_learned.md` fold.
 - **Human**: Settings → Memory → Vault (Phase 2).
 
 ## UI (Settings → Memory → "Vault" group) — Phase 2
@@ -152,9 +155,16 @@ alongside the other `seed*()` steps; guarded by settings flag `vault_migration_v
    `/vault-compress`) + Settings → Memory Vault group (entry table, two-tab Readable/Raw
    editor, canonical-diff-before-save, revisions, +Add, delete) + tests (render determinism,
    parse tolerance/dedup). Endpoints smoke-verified live (list/save/guard-reject/detail/UI).
-3. ☐ **Write paths + legacy removal**: librarian fold → vault (compress, scoped);
-   upstream hook repoint; re-fold the migration entries via compress for terseness;
-   delete learned-doc code paths + docs; tests (fold scoping matrix repo/global/role).
+3. ☑ **Write paths + legacy removal**: librarian fold → vault (`selfImprove` rewritten to
+   compress scoped/role buckets, upstream hook repointed to rendered global entries); deleted
+   `loadLearned`/`SHARED_LEARNED_PATH`/`roleLearnedPath` + the "learning" file group (UI + memory.ts)
+   + the learned-doc fold code; guarded run-once purge of the dead learned-doc DB overrides
+   (`purgeAgentOverride`, boot step after the migration reads them). No learned docs existed on
+   disk/in git (they were DB-override-only), so nothing to `git rm`. The Phase-1 boot migration is
+   KEPT (self-contained, guarded no-op) rather than deleted — preserves no-dark-window for any
+   instance upgrading straight through. Skipped re-folding migration entries via compress (churns
+   keys; the librarian fold refines them over time). Tests: `test/vault-fold.test.mjs` (scoping
+   matrix generic/repo/role + bucket collapse + override purge).
 
 ## Risks / notes
 

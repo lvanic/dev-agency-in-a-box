@@ -16,8 +16,16 @@
  */
 import { getSetting, setSetting } from "./db/settings.js";
 import { listVault, upsertVaultEntry, scopeMatches, type VaultEntry, type VaultRow } from "./db/vault.js";
-import { readAgentFile, SHARED_LEARNED_PATH, roleLearnedPath } from "./memory.js";
+import { purgeAgentOverride } from "./db/agent_overrides.js";
+import { readAgentFile } from "./memory.js";
 import { ALL_ROLES } from "./agents/roles.js";
+
+// The legacy learned-doc paths, inlined here (the exported constants + loadLearned were removed with
+// the retired learned docs — see docs/central-vault-plan.md Phase 3). This one-off boot migration
+// still reads their EFFECTIVE content (DB override, if any) so an instance upgrading straight through
+// to Phase 3 still seeds the vault before the first agent run — it is a no-op once the flag is set.
+const LEGACY_SHARED_LEARNED = "central/playbooks/_learned.md";
+const legacyRoleLearned = (role: string): string => `central/agents/${role}.learned.md`;
 
 /** Rough token estimate (chars/4) — same order-of-magnitude heuristic the prompt budgeters use. */
 const estTokens = (s: string): number => Math.ceil(s.length / 4);
@@ -71,6 +79,7 @@ export function vaultSlice(repo?: string, role?: string): string {
 // ── one-off boot migration: legacy learned docs → vault ───────────────────────────────────────────
 
 const MIGRATION_FLAG = "vault_migration_v1";
+const PURGE_FLAG = "vault_legacy_purged_v1";
 const MAX_MIGRATED_C = 380; // stay under the vault's own MAX_C_LEN, leaving room, since bullets are prose.
 
 function slugify(s: string): string {
@@ -126,10 +135,10 @@ export async function migrateLearnedToVault(): Promise<number> {
     }
   };
   try {
-    const shared = (await readAgentFile(SHARED_LEARNED_PATH)) || "";
+    const shared = (await readAgentFile(LEGACY_SHARED_LEARNED)) || "";
     if (shared.trim()) await seed(shared, "learned");
     for (const role of ALL_ROLES) {
-      const mine = (await readAgentFile(roleLearnedPath(role))) || "";
+      const mine = (await readAgentFile(legacyRoleLearned(role))) || "";
       if (mine.trim()) await seed(mine, role, role);
     }
     setSetting(MIGRATION_FLAG, "1"); // one-shot: mark done even when the docs were empty (nothing to redo)
@@ -138,4 +147,27 @@ export async function migrateLearnedToVault(): Promise<number> {
     console.warn("[agency] vault migration skipped:", (err as Error).message);
   }
   return created;
+}
+
+/**
+ * Retire the legacy learned-doc DB overrides (docs/central-vault-plan.md Phase 3). Once nothing reads
+ * or lists `_learned.md` / `<role>.learned.md`, their override/revision/default rows are dead data —
+ * hard-purge them (no disk mirror). Guarded run-once; MUST run AFTER migrateLearnedToVault has read
+ * their effective content. Best-effort; never throws.
+ */
+export function purgeLegacyLearnedOverrides(): number {
+  if (getSetting(PURGE_FLAG)) return 0;
+  let purged = 0;
+  try {
+    const paths = [LEGACY_SHARED_LEARNED, ...ALL_ROLES.map(legacyRoleLearned)];
+    for (const p of paths) {
+      purgeAgentOverride(p);
+      purged++;
+    }
+    setSetting(PURGE_FLAG, "1");
+    console.log(`[agency] vault: purged ${purged} legacy learned-doc override path(s)`);
+  } catch (err) {
+    console.warn("[agency] vault legacy purge skipped:", (err as Error).message);
+  }
+  return purged;
 }
