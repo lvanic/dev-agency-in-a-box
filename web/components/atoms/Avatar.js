@@ -2,7 +2,7 @@
 // One avatar file per role (a mixed-gender team). Swap a value to change who represents a role.
 import { html } from "/web/vendor/standalone.mjs";
 
-const ROLE_AVATAR = { planner: "planner-f", plan: "planner-f", decomposer: "auditor", architect: "architect", arch: "architect", developer: "developer-f", dev: "developer-f", coder: "developer-f", reviewer: "reviewer", review: "reviewer", tester: "tester", test: "tester", librarian: "librarian-f", auditor: "auditor", analyzer: "auditor", orchestrator: "orchestrator", orch: "orchestrator" };
+const ROLE_AVATAR = { planner: "planner-f", plan: "planner-f", decomposer: "auditor", architect: "architect", arch: "architect", developer: "developer-f", dev: "developer-f", coder: "developer-f", reviewer: "reviewer", review: "reviewer", tester: "tester", test: "tester", librarian: "librarian-f", auditor: "auditor", analyzer: "auditor", orchestrator: "planner", orch: "planner" };
 const ROLE_WORDS = ["planner", "decomposer", "architect", "developer", "reviewer", "tester", "librarian", "auditor", "analyzer"];
 // crop="head" → the dedicated head-only SVG (dashboard); "full" → the whole figure (detail comments).
 // Full pool of persona art (heads + full). Unknown agents get a STABLE distinct one from the pool
