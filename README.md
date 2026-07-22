@@ -24,8 +24,7 @@ and the self-evolving loop. Full design: [`../dev-agency-architecture.md`](../de
    your first repo. No tokens in env — it's all in the dashboard, stored encrypted.
 4. **Use it**: open an issue (or **+ New**) and the agency plans → builds → reviews → opens a PR.
 
-Dev/prod split and staging: [`DEPLOY.md`](DEPLOY.md). The old single-page dashboard stays at
-`/classic` (advanced models/agents editors live there).
+Dev/prod split and staging: [`DEPLOY.md`](DEPLOY.md).
 
 ---
 

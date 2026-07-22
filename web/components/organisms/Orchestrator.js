@@ -59,7 +59,7 @@ function Bubble({ m, repo, reload, onOpenIssue }) {
   const isUser = m.role === "user";
   const proposal = m.meta && m.meta.proposal ? m.meta.proposal : null;
   return html`<div class=${"obub " + (isUser ? "obub-user" : "obub-orch")}>
-    ${isUser ? null : html`<span class="obub-av"><${Avatar} role="auditor" size=${26} crop="head"/></span>`}
+    ${isUser ? null : html`<span class="obub-av"><${Avatar} role="orchestrator" size=${26} crop="head"/></span>`}
     <div class="obub-body">
       <div class="obub-txt" dangerouslySetInnerHTML=${{ __html: md(m.text || "") }}></div>
       ${proposal ? html`<${ProposalCard} repo=${repo} proposal=${proposal} reload=${reload} onOpenIssue=${onOpenIssue}/>` : null}
@@ -130,7 +130,7 @@ export function Orchestrator({ repos, repoFilter, setRepoFilter, reload, onOpenI
             <div class="obh">What can I help with in ${repoLabel}?</div>
             <div class="obsub">Describe an idea, ask what's feasible, or sketch a feature. When it's ready, I'll propose scoped issues you can create with one click — or just say “quick fix: …” for a one-liner.</div>
           </div>`}
-      ${busy ? html`<div class="obub obub-orch"><span class="obub-av"><${Avatar} role="auditor" size=${26} crop="head"/></span><div class="obub-body"><div class="obub-txt obub-think"><${Spinner} size=${13}/> thinking…</div></div></div>` : null}
+      ${busy ? html`<div class="obub obub-orch"><span class="obub-av"><${Avatar} role="orchestrator" size=${26} crop="head"/></span><div class="obub-body"><div class="obub-txt obub-think"><${Spinner} size=${13}/> thinking…</div></div></div>` : null}
     </div>
     <div class="orch-compose">
       <${ChatComposer}
