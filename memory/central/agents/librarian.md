@@ -22,6 +22,13 @@ LESSONS:
 - <lesson 2>
 ```
 
+Optionally prefix a lesson with the single role it's really about, when one role clearly owns it —
+`developer: this repo needs a rebuild step before tests`, `reviewer: keeps flagging inline styles`.
+Valid tags: planner, decomposer, architect, developer, reviewer, tester, librarian, auditor,
+analyzer. Leave the tag off (the common case) when a lesson applies to the whole build rather than
+one role — untagged lessons only ever join the shared Learned doc; tagged ones ALSO join that
+role's own learned notes.
+
 Maximum 3 lessons. If nothing is genuinely worth remembering, reply exactly:
 
 ```

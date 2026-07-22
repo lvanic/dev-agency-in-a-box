@@ -6,11 +6,11 @@
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getAgentOverride, listAgentOverridePaths } from "./store.js";
+import { getAgentOverride, getAgentDefault, listAgentOverridePaths } from "./store.js";
 
-const here = dirname(fileURLToPath(import.meta.url));
-// src/ -> project root
-const projectRoot = join(here, "..");
+// Overridable (same env var as db/agent_overrides.ts) so tests can point both at a throwaway tmp
+// dir instead of this actual checkout's memory/ files.
+const projectRoot = process.env.AGENCY_MEMORY_ROOT?.trim() || join(dirname(fileURLToPath(import.meta.url)), "..");
 const memoryRoot = join(projectRoot, "memory");
 
 async function readIfExists(path: string): Promise<string> {
@@ -22,13 +22,21 @@ async function readIfExists(path: string): Promise<string> {
 }
 
 /**
- * Read an agent file (by its repo-relative path under memory/) preferring a live dashboard
- * edit stored in the DB, falling back to the on-disk default. This is what makes edits take
- * effect on the next agent run without a redeploy.
+ * Read an agent file (by its repo-relative path under memory/), preferring, in order:
+ *   1. a live dashboard/self-improvement edit stored in the DB (the "override"),
+ *   2. the PRISTINE default captured in the DB the first time this path was ever overridden —
+ *      once an override exists, setAgentOverride mirrors it onto disk, so the disk file itself
+ *      is no longer a reliable "default" (see db/agent_overrides.ts); this is what a revert
+ *      actually reverts to, without depending on that disk mirror having completed,
+ *   3. the on-disk file — only reached for a path that's never been touched, where disk IS
+ *      still the true default.
+ * This is what makes edits (and reverts) take effect on the next agent run without a redeploy.
  */
 async function readWithOverride(rel: string): Promise<string> {
   const ov = getAgentOverride(rel);
   if (ov != null) return ov;
+  const pristine = getAgentDefault(rel);
+  if (pristine != null) return pristine;
   return readIfExists(join(memoryRoot, rel));
 }
 

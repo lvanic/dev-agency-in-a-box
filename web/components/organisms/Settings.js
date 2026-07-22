@@ -11,6 +11,7 @@ import { ModelSelect } from "../molecules/ModelSelect.js";
 import { ProviderSearchSelect } from "../molecules/ProviderSearchSelect.js";
 import { SecretField } from "../molecules/SecretField.js";
 import { RepoPicker } from "../molecules/RepoPicker.js";
+import { MemorySection } from "./MemorySettings.js";
 import { api, getJSON } from "../../lib/api.js";
 import { sortModelsByRecency } from "../../lib/model-recency.js";
 import { toast } from "../../lib/toast.js";
@@ -37,6 +38,7 @@ export function SettingsShell({ data, onClose, reload, section: initial, openWor
     { k: "github", label: "GitHub", icon: "link" },
     { k: "repos", label: "Repositories", icon: "layers" },
     { k: "environments", label: "Environments", icon: "laptop" },
+    { k: "memory", label: "Memory", icon: "sparkles" },
     ...(admin ? [{ k: "team", label: "Team", icon: "users" }] : []),
     { k: "account", label: "Account", icon: "lock" },
   ];
@@ -57,6 +59,7 @@ export function SettingsShell({ data, onClose, reload, section: initial, openWor
         ${section === "github" ? html`<${GithubSection} secretKeys=${data.secretKeys || []} github=${data.github} reload=${reload}/>` : null}
         ${section === "repos" ? html`<${ReposSection} repos=${repos} reload=${reload} auto=${auto} autoRepos=${autoRepos} setAuto=${setAuto}/>` : null}
         ${section === "environments" ? html`<${EnvironmentsSection} admin=${admin}/>` : null}
+        ${section === "memory" ? html`<${MemorySection}/>` : null}
         ${section === "team" && admin ? html`<${TeamSection} users=${data.users || []} webhookSecretSet=${data.webhookSecretSet} reload=${reload}/>` : null}
         ${section === "account" ? html`<${AccountSection} data=${data} reload=${reload} onClose=${onClose}/>` : null}
       </div>

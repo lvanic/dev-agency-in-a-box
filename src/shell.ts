@@ -500,6 +500,20 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .setshell__hint{font-size:11px;color:var(--ink-3);padding:8px 10px}
 .setshell__body{flex:1;min-width:0;overflow:auto;padding:22px 26px 30px}
 @media (max-width:760px){.setshell{padding:0}.setshell__panel{flex-direction:column;height:100%;border-radius:0}.setshell__nav{width:100%;flex-direction:row;flex-wrap:wrap;padding:12px 44px 8px 10px;border-right:none;border-bottom:1px solid var(--line)}.setshell__title{display:none}.setshell__hint{display:none}.setshell__navsep{display:none}}
+/* Memory tab (Settings → Memory): file list + markdown editor + revision history. */
+.memtab{display:flex;gap:16px;align-items:flex-start}
+.memtab__list{width:220px;flex:none;overflow:auto;max-height:70vh}
+.memtab__group{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);margin:14px 2px 6px}
+.memtab__group:first-child{margin-top:0}
+.memtab__file{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:6px 8px;border:none;background:none;border-radius:7px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.memtab__file:hover{background:var(--surface-2)}
+.memtab__file.on{background:var(--surface-2);color:var(--ink-1);font-weight:600}
+.memtab__badge{width:6px;height:6px;border-radius:50%;background:transparent;flex:none}
+.memtab__badge.on{background:var(--accent,#3b82f6)}
+.memtab__editor{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}
+.memtab__revs{max-height:220px;overflow:auto;border-top:1px solid var(--line);margin-top:2px;padding-top:6px}
+.memtab__revrow{display:flex;align-items:center;gap:8px;padding:5px 2px}
+@media(max-width:760px){.memtab{flex-direction:column}.memtab__list{width:100%;max-height:220px}}
 /* Provider cards + model checkmark list */
 .provcard{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:8px}
 .provcard__h{display:flex;align-items:center;gap:8px;width:100%;padding:10px 12px;border:none;background:none;cursor:pointer;font-size:13.5px;color:var(--ink-1)}

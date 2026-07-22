@@ -142,7 +142,7 @@ export function getDb(): DatabaseSync | null {
       );
       CREATE TABLE IF NOT EXISTS lessons (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        repo TEXT, number INTEGER, lesson TEXT NOT NULL,
+        repo TEXT, number INTEGER, lesson TEXT NOT NULL, role TEXT,
         processed INTEGER NOT NULL DEFAULT 0, created_at TEXT
       );
       CREATE TABLE IF NOT EXISTS thread_cursor (
@@ -220,6 +220,10 @@ export function getDb(): DatabaseSync | null {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         path TEXT NOT NULL, content TEXT, source TEXT, note TEXT, created_at TEXT
       );
+      -- The TRUE pristine on-disk default for a path, snapshotted the first time it's ever
+      -- overridden (before the override gets mirrored onto disk and overwrites it there). Lets
+      -- "revert to default" restore what actually shipped instead of the last edit.
+      CREATE TABLE IF NOT EXISTS agent_defaults (path TEXT PRIMARY KEY, content TEXT, captured_at TEXT);
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL, email TEXT, password_hash TEXT NOT NULL,
@@ -279,6 +283,7 @@ export function getDb(): DatabaseSync | null {
       `ALTER TABLE workflows ADD COLUMN hooks TEXT`,
       `ALTER TABLE issues ADD COLUMN by_agent INTEGER NOT NULL DEFAULT 0`,
       `ALTER TABLE issues ADD COLUMN created_at TEXT`,
+      `ALTER TABLE lessons ADD COLUMN role TEXT`,
     ]) {
       try {
         d.exec(sql);

@@ -157,7 +157,7 @@ export interface RoleRunResult {
   costUsd: number;
 }
 
-async function buildSystemPrompt(role: RoleName, customPersona?: string): Promise<string> {
+async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: string): Promise<string> {
   const def = ROLES[role];
   const [persona0, constitution, playbooks, learned] = await Promise.all([
     loadPersona(def.personaFile),
@@ -167,7 +167,7 @@ async function buildSystemPrompt(role: RoleName, customPersona?: string): Promis
   ]);
   const persona = (customPersona && customPersona.trim()) ? customPersona : persona0;
   // Keep the self-improving parts bounded so the (cache-written) system prompt stays small.
-  const lessons = recentLessons(8);
+  const lessons = recentLessons(8, repo);
   const learnedCapped = learned.length > 3500 ? learned.slice(0, 3500) + "\n…(truncated)" : learned;
   return [
     "=== OUTPUT STYLE (strict) ===",
@@ -218,7 +218,7 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
   // The agency's own memory (past plans/lessons/reviews/issues) as an on-demand tool — so the agent
   // can PULL context when stuck instead of us pushing the whole thread into every prompt.
   const rc = recallWiring(input.repo);
-  const systemPrompt = (await buildSystemPrompt(role, input.agentDef?.persona)) + (gn ? `\n\n${GITNEXUS_PROMPT}` : "") + `\n\n${RECALL_PROMPT}`;
+  const systemPrompt = (await buildSystemPrompt(role, input.agentDef?.persona, input.repo)) + (gn ? `\n\n${GITNEXUS_PROMPT}` : "") + `\n\n${RECALL_PROMPT}`;
   // Custom-agent tool gate (the single user-facing "Can write code" toggle). A docs-only agent reads
   // anywhere but may write ONLY into the issue's _plan/ folder — enforced by (a) handing it just the
   // Write tool (no Edit/Bash) and (b) a hard system-prompt constraint, since the SDK can't path-scope.

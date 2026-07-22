@@ -5,17 +5,21 @@ export interface LessonRow {
   repo: string;
   number: number;
   lesson: string;
+  /** Which role the lesson is about, when the librarian could tell (nullable — most builds span
+   *  several roles, so this is best-effort, not guaranteed). */
+  role: string | null;
   created_at: string;
 }
 
-export function recordLesson(repo: string, number: number, lesson: string): void {
+export function recordLesson(repo: string, number: number, lesson: string, role: string | null = null): void {
   const d = getDb();
   if (!d) return;
   try {
-    d.prepare(`INSERT INTO lessons (repo, number, lesson, created_at) VALUES (?, ?, ?, ?)`).run(
+    d.prepare(`INSERT INTO lessons (repo, number, lesson, role, created_at) VALUES (?, ?, ?, ?, ?)`).run(
       repo,
       number,
       lesson.slice(0, 600),
+      role || null,
       now(),
     );
   } catch {
@@ -23,13 +27,23 @@ export function recordLesson(repo: string, number: number, lesson: string): void
   }
 }
 
-export function recentLessons(limit = 12): string[] {
+/**
+ * Recent lessons for the system prompt. When `repo` is given, same-repo lessons are preferred
+ * (still fills up to `limit` with global ones if the repo doesn't have enough of its own) —
+ * repo-specific quirks ("this repo uses pnpm") matter more to that repo's agents than another
+ * repo's, but a nearly-empty repo shouldn't lose the benefit of everything else learned.
+ */
+export function recentLessons(limit = 12, repo?: string): string[] {
   const d = getDb();
   if (!d) return [];
   try {
-    const rows = d
-      .prepare(`SELECT lesson FROM lessons ORDER BY id DESC LIMIT ?`)
-      .all(limit) as unknown as Array<{ lesson: string }>;
+    const rows = repo
+      ? (d
+          .prepare(`SELECT lesson FROM lessons ORDER BY (repo = ?) DESC, id DESC LIMIT ?`)
+          .all(repo, limit) as unknown as Array<{ lesson: string }>)
+      : (d
+          .prepare(`SELECT lesson FROM lessons ORDER BY id DESC LIMIT ?`)
+          .all(limit) as unknown as Array<{ lesson: string }>);
     return rows.map((r) => r.lesson).reverse();
   } catch {
     return [];
@@ -41,7 +55,7 @@ export function unprocessedLessons(): LessonRow[] {
   if (!d) return [];
   try {
     return d
-      .prepare(`SELECT id, repo, number, lesson, created_at FROM lessons WHERE processed = 0 ORDER BY id`)
+      .prepare(`SELECT id, repo, number, lesson, role, created_at FROM lessons WHERE processed = 0 ORDER BY id`)
       .all() as unknown as LessonRow[];
   } catch {
     return [];

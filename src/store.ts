@@ -44,7 +44,7 @@ export { upsertAgentDef, getAgentDef, listAgentDefs, deleteAgentDef, seedChatAge
 export type { AgentDef } from "./db/agent_def.js";
 export { searchMemory } from "./db/memory.js";
 export type { MemoryHit } from "./db/memory.js";
-export { getAgentOverride, setAgentOverride, listAgentRevisions, getAgentRevision, deleteAgentOverride, listAgentOverridePaths } from "./db/agent_overrides.js";
+export { getAgentOverride, getAgentDefault, setAgentOverride, listAgentRevisions, getAgentRevision, deleteAgentOverride, listAgentOverridePaths } from "./db/agent_overrides.js";
 export type { AgentRevision } from "./db/agent_overrides.js";
 export { addWatchedRepo, removeWatchedRepo, listWatchedRepos } from "./db/watched.js";
 // Re-export the users aggregate (Candidate 3, #70).
