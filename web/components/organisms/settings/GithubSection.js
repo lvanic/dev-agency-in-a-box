@@ -30,6 +30,7 @@ export function GitHubConnect({ github, reload }) {
   const user = github && github.user;
   const needClientId = github && !github.clientIdSet;
   function stop() { if (pollRef.current) clearTimeout(pollRef.current); pollRef.current = null; }
+  function copyCode(code) { try { if (navigator.clipboard) navigator.clipboard.writeText(code); } catch (e) {} }
   useEffect(() => stop, []);
   function poll(interval) {
     let secs = interval || 5;
@@ -46,7 +47,8 @@ export function GitHubConnect({ github, reload }) {
     api("/gh-connect", needClientId ? { value: clientId.trim() } : {}).then((d) => {
       if (d.error) { setErr(d.error); setBusy(false); return; }
       setFlow(d);
-      try { window.open(d.verification_uri, "_blank", "noopener"); } catch (e) {}
+      copyCode(d.user_code); // auto-copy so the code is ready to paste; stay on this page (don't steal focus with a popup)
+      toast("Code " + d.user_code + " copied to clipboard");
       poll(d.interval);
     }).catch((e) => { setErr((e && e.message) || "Couldn't start login"); setBusy(false); });
   }
@@ -75,8 +77,9 @@ export function GitHubConnect({ github, reload }) {
     <label>OAuth App client ID</label>
       <input placeholder="Iv1.… or Ov23… (your own GitHub OAuth App)" value=${clientId} onInput=${(e) => setClientId(e.target.value)}/>` : null}
     ${flow ? html`<div class="cmdbox" style="flex-direction:column;align-items:flex-start;gap:6px">
-      <div>1 · Open <a href=${flow.verification_uri} target="_blank" rel="noopener">${flow.verification_uri}</a></div>
-      <div>2 · Enter code <code style="font-size:16px;letter-spacing:2px">${flow.user_code}</code></div>
+      <div>Your code (copied to clipboard): <code style="font-size:16px;letter-spacing:2px">${flow.user_code}</code></div>
+      <button class="btn primary" style="width:100%;justify-content:center" onClick=${() => { copyCode(flow.user_code); toast("Code copied — paste it on GitHub"); try { window.open(flow.verification_uri, "_blank", "noopener"); } catch (e) {} }}><${Icon} name="link" size=${15}/> Copy to clipboard & open GitHub</button>
+      <div class="muted" style="font-size:11px">Or open <a href=${flow.verification_uri} target="_blank" rel="noopener">${flow.verification_uri}</a> yourself and paste the code.</div>
       <div class="muted" style="font-size:11px;display:flex;align-items:center;gap:6px"><${Spinner} size=${12}/> waiting for you to authorize…</div>
     </div>` : html`<button class="btn primary" style="width:100%;justify-content:center" disabled=${busy || (needClientId && !clientId.trim())} onClick=${connect}>${busy ? html`<${Spinner} size=${15}/>` : html`<${Icon} name="link" size=${15}/>`} Connect GitHub</button>`}
     ${err ? html`<div class="testres bad" style="margin-top:6px">✗ ${err}</div>` : null}
