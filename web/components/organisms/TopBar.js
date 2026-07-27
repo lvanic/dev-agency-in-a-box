@@ -242,7 +242,7 @@ export function StatusLine({ working, session, spend, analyzer, reload, sort, se
     </span>` : null}
     <span class="statpop">
       <span class="buildstamp statlink" title=${verTitle} onClick=${openBuild}>${verLabel}</span>
-      ${pop === "build" ? html`<div class="dropscrim" onClick=${() => setPop(null)}></div><div class="dropmenu statmenu" style="right:0;left:auto;min-width:280px;max-width:360px">
+      ${pop === "build" ? html`<div class="dropscrim" onClick=${() => setPop(null)}></div><div class="dropmenu statmenu" style="right:0;left:auto;top:auto;bottom:100%;margin-bottom:8px;min-width:280px;max-width:360px">
         <div class="dropmenu-h">This build</div>
         <div class="muted" style="font-size:11.5px;margin-bottom:8px">${ver ? html`${ver.tag || ("v" + ver.version)}${ver.sha ? " · " + ver.sha : ""}${ver.builtAt ? " · built " + new Date(ver.builtAt).toLocaleString() : ""}` : "Development build"}</div>
         <div class="dropmenu-h">Last merged PRs${ver && ver.pr ? " — running #" + ver.pr : ""}</div>

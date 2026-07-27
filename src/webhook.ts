@@ -786,9 +786,16 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
       // Last few merged PRs on the agency's own repo — powers the build-stamp tooltip so you can
       // confirm the running build corresponds to a specific merge.
       if (url === "/agency-prs") {
-        void listMergedPrs(cfg.agencyRepo, 5)
-          .then((prs) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ repo: cfg.agencyRepo, prs })))
-          .catch(() => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ repo: cfg.agencyRepo, prs: [] })));
+        // cfg.agencyRepo can be owner-less (e.g. "/dev-agency") when the owner didn't resolve at boot;
+        // `gh pr list --repo /dev-agency` then fails. Match it to a watched repo's full owner/name.
+        const nameOf = (r: string): string => r.split("/").pop() || r;
+        const agencyName = nameOf(cfg.agencyRepo).toLowerCase();
+        const agencyRepo = cfg.agencyRepo.includes("/") && !cfg.agencyRepo.startsWith("/")
+          ? cfg.agencyRepo
+          : (effectiveRepos(cfg).find((r) => nameOf(r).toLowerCase() === agencyName) || cfg.agencyRepo);
+        void listMergedPrs(agencyRepo, 5)
+          .then((prs) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ repo: agencyRepo, prs })))
+          .catch(() => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ repo: agencyRepo, prs: [] })));
         return;
       }
 
