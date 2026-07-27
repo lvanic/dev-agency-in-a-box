@@ -54,7 +54,11 @@ function run(cmd: string, cwd: string, timeoutMs = 240_000, extraPath?: string):
       ...(token ? { GH_TOKEN: token, GITHUB_TOKEN: token } : {}),
       ...(extraPath ? { PATH: `${extraPath}:${process.env.PATH ?? ""}` } : {}),
     };
-    const child = spawn("bash", ["-lc", cmd], { cwd, env });
+    // `bash -c`, NOT `-lc`: a login shell sources /etc/profile, which on Debian hard-resets PATH to
+    // the system default — wiping both the toolchain `extraPath` we prepend here AND the shared-bin
+    // dir the Dockerfile puts on PATH. That made `command -v flutter` fail even when the SDK was
+    // installed and `ready`, pausing the issue forever. Non-login keeps our env.PATH authoritative.
+    const child = spawn("bash", ["-c", cmd], { cwd, env });
     let out = "";
     const cap = (d: Buffer) => { out += d.toString(); if (out.length > 200_000) out = out.slice(-200_000); };
     child.stdout.on("data", cap);
