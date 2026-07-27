@@ -221,8 +221,8 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .agency-logo__fig{position:relative;height:100%;margin-left:-9px;line-height:0;cursor:pointer;transition:transform .18s cubic-bezier(.34,1.56,.64,1),filter .18s ease;transform-origin:bottom center;filter:saturate(.85) brightness(.97)}
 .agency-logo__fig:first-child{margin-left:0}
 .agency-logo__fig img{width:100%;height:100%;object-fit:contain;object-position:bottom;border-radius:0;display:block;-webkit-user-select:none;user-select:none}
-.agency-logo__fig:hover,.agency-logo__fig.up{transform:translateY(-4px) scale(1.12);filter:saturate(1) brightness(1) drop-shadow(0 3px 4px rgba(0,0,0,.28))}
-@media(max-width:560px){.agency-logo__fig{margin-left:-11px}}
+.agency-logo__fig:hover{transform:translateY(-4px) scale(1.12);filter:saturate(1) brightness(1) drop-shadow(0 3px 4px rgba(0,0,0,.28));z-index:20}
+.brandname-short{display:none;color:var(--brand)}
 .envbadge{font-size:10px;font-weight:600;letter-spacing:.04em;background:var(--amber-weak);color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 30%,transparent);border-radius:5px;padding:1px 6px}
 .sub{color:var(--ink-3);font-size:12px}
 
@@ -702,7 +702,18 @@ html[data-theme="dark"] .gtip{background:#000;color:#fff}
 .topbar{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line);padding:calc(8px + var(--safe-t)) 14px 8px;display:flex;align-items:center;gap:10px}
 .brand{font-size:16px;font-weight:600;display:flex;align-items:center;gap:7px}
 .brand .lic{color:var(--accent)}
-@media(max-width:560px){.brandname{display:none}.repodrop-btn{max-width:52vw}}
+@media(max-width:560px){
+  .topbar{flex-wrap:wrap;row-gap:8px}
+  .topbar .spacer{flex:0 0 0;width:0}
+  .brand{margin-right:auto}
+  .brandname{display:none}
+  .brandname-short{display:inline}
+  .viewseg{display:none}
+  .agency-logo__fig:not(:first-child){display:none}
+  .agency-logo{padding:2px 6px 0}
+  .repodrop{order:9;flex:1 0 100%;min-width:0}
+  .repodrop-btn{width:100%;max-width:none;justify-content:space-between}
+}
 .sub{color:var(--ink-2);font-size:12px}
 .envbadge{font-size:10px;font-weight:600;letter-spacing:.05em;background:var(--amber-weak);color:var(--amber);border:1px solid var(--amber);border-radius:6px;padding:1px 6px;vertical-align:2px}
 .dropwrap{position:relative;display:inline-flex}

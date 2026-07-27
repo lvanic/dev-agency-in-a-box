@@ -78,7 +78,7 @@ export function TopBar({ working, scanning, env, theme, setTheme, onSettings, on
     { icon: "settings", label: "Settings", fn: onSettings },
   ];
   return html`<div class="topbar">
-    <div class="brand"><${AgencyLogo} size=${30}/> <span class="brandname">Dev Agency in a Box</span> ${env === "development" ? html`<span class="envbadge">DEV</span>` : null} ${working ? html`<span class="dot"></span>` : null}</div>
+    <div class="brand"><${AgencyLogo} size=${30}/> <span class="brandname">Dev Agency in a Box</span><span class="brandname-short">DAiaB</span> ${env === "development" ? html`<span class="envbadge">DEV</span>` : null} ${working ? html`<span class="dot"></span>` : null}</div>
     <div class="spacer"></div>
     <${RepoDropdown} repos=${repos} repoFilter=${repoFilter} setRepoFilter=${setRepoFilter} onManageRepos=${onManageRepos}/>
     <div class="spacer"></div>
