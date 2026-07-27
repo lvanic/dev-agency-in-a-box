@@ -10,7 +10,7 @@ import { claudeRunEnv } from "../runners/sdk-claude.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
-import { ROLES, modelFor, canonicalModel, roleTier, type RoleName } from "./roles.js";
+import { ROLES, modelFor, canonicalModel, roleTier, selectPlaybooks, type RoleName } from "./roles.js";
 import { tierModel, getIssueProvider, getIssueAgentModels, parseModelRef, fallbackFor, getIssueUseFallback, type Tier, type Provider } from "../db/providers.js";
 import { resolveTierModel, priceFor } from "./pricing.js";
 import { loadConstitution, loadPersona, loadPlaybooks } from "../memory.js";
@@ -263,12 +263,14 @@ export interface RoleRunResult {
   costUsd: number;
 }
 
-async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: string): Promise<string> {
+async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: string, task?: string): Promise<string> {
   const def = ROLES[role];
+  // Progressive disclosure: only load the domain playbooks this task actually touches (see
+  // selectPlaybooks) — the developer's 9-playbook stack is the biggest recurring token slice.
   const [persona0, constitution, playbooks] = await Promise.all([
     loadPersona(def.personaFile),
     loadConstitution(),
-    loadPlaybooks(def.playbooks),
+    loadPlaybooks(selectPlaybooks(def.playbooks, task)),
   ]);
   const persona = (customPersona && customPersona.trim()) ? customPersona : persona0;
   // Keep the self-improving parts bounded so the (cache-written) system prompt stays small.
@@ -329,7 +331,7 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
   // The Central Vault's translate tool: renders the durable shared knowledge applicable to this
   // repo+role as prose on demand (the canonical one-liners are already in the system prompt).
   const vt = vaultToolWiring(input.repo, role);
-  const systemPrompt = (await buildSystemPrompt(role, input.agentDef?.persona, input.repo)) + (gn ? `\n\n${GITNEXUS_PROMPT}` : "") + `\n\n${RECALL_PROMPT}`;
+  const systemPrompt = (await buildSystemPrompt(role, input.agentDef?.persona, input.repo, input.task)) + (gn ? `\n\n${GITNEXUS_PROMPT}` : "") + `\n\n${RECALL_PROMPT}`;
   // Custom-agent tool gate (the single user-facing "Can write code" toggle). A docs-only agent reads
   // anywhere but may write ONLY into the issue's _plan/ folder — enforced by (a) handing it just the
   // Write tool (no Edit/Bash) and (b) a hard system-prompt constraint, since the SDK can't path-scope.

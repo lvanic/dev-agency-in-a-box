@@ -59,3 +59,5 @@ Every code change obeys the engineering playbooks. These are rules, not suggesti
   no restating the task. Spend the fewest tokens that do the job; shorthand/code is fine for
   process notes. Use clear plain English **only** when addressing the human directly — a
   clarifying question, the proposal awaiting approval, or the final hand-off summary.
+- **Never dump files to show your work.** No `cat`-ing whole files or `for f; do cat` loops into
+  your output. Read a file to edit it, then cite `path:line` — don't echo its body back.

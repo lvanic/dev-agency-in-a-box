@@ -177,6 +177,31 @@ export const ROLES: Record<RoleName, RoleDef> = {
   },
 };
 
+// Progressive disclosure (token-optimization-plan-2026-07-27): a role's playbook stack is the biggest
+// recurring slice of its system prompt (the developer loads 9). These DOMAIN playbooks are only worth
+// their tokens when the work actually touches that area — a UI issue shouldn't pay for the database
+// playbook, and vice versa. Everything NOT gated here (engineering-principles, reuse-first,
+// logic-separation, git-workflow, how-to-review) is always loaded — those are cross-cutting.
+const DOMAIN_PLAYBOOK_GATES: Record<string, RegExp> = {
+  "frontend-atomic-design": /\b(ui|frontend|front-end|component|screen|view|page|atom|molecule|organism|widget|react|tsx|jsx|css|style|styles|button|form|modal|layout|render|design|icon|nav)\b/i,
+  "theming": /\b(theme|theming|colou?r|dark ?mode|light ?mode|token|palette|style|styles|css|design ?system|contrast)\b/i,
+  "backend": /\b(backend|back-end|api|endpoint|route|router|server|handler|service|controller|request|response|http|rest|graphql|webhook|auth|middleware)\b/i,
+  "database": /\b(database|db|sql|sqlite|schema|migration|migrate|query|table|drift|prisma|orm|column|row|index|persist|storage|store)\b/i,
+  "how-to-write-tests": /\b(test|tests|testing|spec|specs|jest|vitest|pytest|coverage|assert|mock|tdd|fixture)\b/i,
+};
+
+/**
+ * Pick the playbooks worth loading for this task: every non-domain (cross-cutting) playbook, plus the
+ * domain playbooks the task text actually touches. Falls back to ALL playbooks for a short/low-signal
+ * task, or if gating would drop the whole set — never under-load a role into ignorance.
+ */
+export function selectPlaybooks(playbooks: string[], task?: string): string[] {
+  const t = (task || "").trim();
+  if (t.length < 40) return playbooks; // too little signal to gate safely
+  const kept = playbooks.filter((p) => { const g = DOMAIN_PLAYBOOK_GATES[p]; return !g || g.test(t); });
+  return kept.length ? kept : playbooks;
+}
+
 /** All role names, derived from the canonical ROLES map — single source of truth. */
 export const ALL_ROLES = Object.keys(ROLES) as RoleName[];
 

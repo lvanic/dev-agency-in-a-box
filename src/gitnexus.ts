@@ -224,4 +224,7 @@ export const GITNEXUS_PROMPT = [
   "LadybugDB FTS extension can't be installed offline). Don't rely on it — if it returns nothing, use",
   "context/impact/cypher above, and only then a TARGETED grep on a specific dir/file (never the whole",
   "repo). If a tool complains about multiple repos, call mcp__gitnexus__list_repos and pass this repo.",
+  "NEVER dump file bodies into your output to 'show your work': no `cat <file>`, no `for f in …; do",
+  "cat \"$f\"; done`, no printing whole files or long ranges. Reading a file to EDIT it is fine; echoing",
+  "its contents wastes tokens for zero value — cite `path:line`, or use context() for how a symbol is used.",
 ].join("\n");
