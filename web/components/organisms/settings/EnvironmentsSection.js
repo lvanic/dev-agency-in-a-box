@@ -60,7 +60,44 @@ export function EnvironmentsSection({ admin }) {
     <div class="muted" style="font-size:12px;margin-bottom:12px">Install language toolchains so agents can run checks for these app types in-agency. When a run needs one that isn't here, it pauses the issue and asks — no PR until the checks actually run. Installed to <code>${tc.dir}</code> (persists across redeploys).</div>
     ${presets.map((t) => TcRow(rowProps(t)))}
     ${custom.length ? html`<div class="sec" style="margin-top:18px">Custom (installed by hand)</div>${custom.map((t) => TcRow(rowProps(t)))}` : null}
+    ${admin ? html`<${RepoToolsets}/>` : null}
     ${admin ? html`<${AddEnv} sharedBin=${tc.sharedBin} onAdded=${load}/>` : html`<div class="muted" style="font-size:12px;margin-top:10px">Only an admin can install environments.</div>`}
+  </div>`;
+}
+// Per-repo toolsets: pick which (shared) toolchains each repo uses. Pinning folds a tool's bin dir
+// onto that repo's PATH when its checks run — no per-repo installs, so different repos can carry
+// completely different toolsets at zero extra disk.
+function RepoToolsets() {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState({});
+  const load = () => getJSON("/repo-toolsets").then(setData).catch(() => setData({ repos: [], toolchains: [] }));
+  useEffect(() => { load(); }, []);
+  if (!data) return null;
+  const repos = data.repos || [], tcs = data.toolchains || [];
+  if (!repos.length || !tcs.length) return null;
+  const toggle = (repo, id, on) => {
+    const k = repo + "|" + id;
+    setBusy((b) => ({ ...b, [k]: true }));
+    api("/repo-toolset", { repo, id, on }).then(load).catch(failed).finally(() => setBusy((b) => ({ ...b, [k]: false })));
+  };
+  return html`<div style="margin-top:22px">
+    <div class="sec">Per-repo toolsets</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">Pick which toolchains each repo uses. Installs stay shared — pinning just adds a tool to that repo's PATH when its checks run. <b>auto</b> = a run already asked for it; <b>○</b> = not installed yet.</div>
+    ${repos.map((r) => {
+      const name = r.repo.split("/").pop();
+      const pinned = new Set(r.pinned || []), requested = new Set(r.requested || []);
+      return html`<div key=${r.repo} style="padding:9px 0;border-top:1px solid var(--line,rgba(128,128,128,.18))">
+        <div style="font-weight:600;font-size:12.5px">${name}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+          ${tcs.map((t) => {
+            const on = pinned.has(t.id), auto = requested.has(t.id), k = r.repo + "|" + t.id;
+            return html`<button key=${t.id} class=${"btn " + (on ? "primary" : "ghost")} style="padding:3px 10px;font-size:11.5px" disabled=${busy[k]} title=${t.status === "ready" ? "installed" : "not installed — install it above"} onClick=${() => toggle(r.repo, t.id, !on)}>
+              ${on ? "✓ " : ""}${t.label}${auto && !on ? " · auto" : ""}${t.status === "ready" ? "" : " ○"}
+            </button>`;
+          })}
+        </div>
+      </div>`;
+    })}
   </div>`;
 }
 function TcRow({ t, admin, busy, live, onInstall, onRemove }) {

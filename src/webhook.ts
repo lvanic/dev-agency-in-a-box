@@ -34,7 +34,7 @@ import { startDeviceFlow, pollDeviceToken, fetchGitHubUser } from "./github-oaut
 import { githubOAuthClientId, githubOAuthToken, githubIdentity } from "./creds.js";
 import { binaryAvailable } from "./runners/registry.js";
 import { installSpec, installCli, RUNNER_PACKAGES } from "./runners/install.js";
-import { allToolchains, getToolchain, toolchainStatus, isInstalling, listToolchainRequests, installToolchain, toolchainsDir, sharedBinDir, toolchainProgress, subscribeToolchains, addCustomToolchain, removeCustomToolchain, reconcileStuckInstalls } from "./toolchains.js";
+import { allToolchains, getToolchain, toolchainStatus, isInstalling, listToolchainRequests, installToolchain, toolchainsDir, sharedBinDir, toolchainProgress, subscribeToolchains, addCustomToolchain, removeCustomToolchain, reconcileStuckInstalls, repoToolset, pinRepoToolchain } from "./toolchains.js";
 import { parseLegacyStatus, withStatus, setBlocked } from "./state.js";
 import { runOrchestratorChat } from "./agents/orchestrator-chat.js";
 import { listOrchThread, clearOrchThread, setByAgent } from "./store.js";
@@ -769,6 +769,20 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         return;
       }
 
+      // Per-repo toolsets: which toolchains each watched repo opts into (shared installs underneath).
+      // Merges explicit pins with the toolchains agents auto-requested for that repo.
+      if (url === "/repo-toolsets") {
+        const reqs = listToolchainRequests();
+        const repos = effectiveRepos(cfg).map((repo) => {
+          const pinned = repoToolset(repo);
+          const requested = [...new Set(reqs.filter((r) => r.repo === repo).map((r) => r.id))];
+          return { repo, pinned, requested };
+        });
+        const toolchains = allToolchains().map((t) => ({ id: t.id, label: t.label, status: isInstalling(t.id) ? "installing" : toolchainStatus(t.id).status }));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ repos, toolchains }));
+        return;
+      }
+
       // Last few merged PRs on the agency's own repo — powers the build-stamp tooltip so you can
       // confirm the running build corresponds to a specific merge.
       if (url === "/agency-prs") {
@@ -1163,7 +1177,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
     }
 
     // Dashboard actions (auth required), not GitHub webhooks.
-    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/vault-save", "/vault-delete", "/vault-compress", "/app-run", "/app-stop", "/promote", "/repo-branches", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/install-toolchain", "/toolchain-add", "/toolchain-remove", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
+    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/vault-save", "/vault-delete", "/vault-compress", "/app-run", "/app-stop", "/promote", "/repo-branches", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/install-toolchain", "/toolchain-add", "/toolchain-remove", "/repo-toolset", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
@@ -1838,6 +1852,15 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           if (!tc || !tc.custom) return void res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "Only custom environments can be removed." }));
           removeCustomToolchain(id);
           return ok();
+        }
+        if (path === "/repo-toolset") {
+          // Pin/unpin a toolchain for a specific repo — the repo's runs get its bin dir on PATH.
+          if (!actor || actor.role !== "admin") return void res.writeHead(403, { "content-type": "application/json" }).end('{"error":"admin only"}');
+          const repoName = String(p.repo ?? "").trim();
+          const id = String(p.id ?? "");
+          if (!repoName || !getToolchain(id)) return void res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "A repo and a known toolchain are required." }));
+          pinRepoToolchain(repoName, id, (p as { on?: boolean }).on !== false);
+          return ok(JSON.stringify({ ok: true, pinned: repoToolset(repoName) }));
         }
         if (path === "/install-cli") {
           if (!actor || actor.role !== "admin") return void res.writeHead(403, { "content-type": "application/json" }).end('{"error":"admin only"}');

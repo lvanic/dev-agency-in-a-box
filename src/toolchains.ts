@@ -232,6 +232,44 @@ export function clearToolchainRequests(id: string): void {
   writeRequests(readRequests().filter((r) => r.id !== id));
 }
 
+// ---- per-repo toolsets (which toolchains a repo declares it needs) ---------
+// Installs stay shared/global (one Flutter on disk, deduped) — a "toolset" is just the list of
+// toolchain ids a repo opts into. A run for that repo gets those tools' bin dirs folded onto PATH
+// (additively, on top of auto-detection), so different repos can carry completely different toolsets
+// with zero extra disk. Mirrors the `repo_staging.${repo}` per-repo settings convention.
+
+const repoPinKey = (repo: string): string => `repo_toolchains.${repo}`;
+
+/** The toolchain ids explicitly pinned to a repo (valid, existing ids only). */
+export function repoToolset(repo: string): string[] {
+  try {
+    const a = JSON.parse(getSetting(repoPinKey(repo)) || "[]") as unknown;
+    if (!Array.isArray(a)) return [];
+    return [...new Set(a.filter((x): x is string => typeof x === "string" && !!getToolchain(x)))];
+  } catch {
+    return [];
+  }
+}
+export function setRepoToolset(repo: string, ids: string[]): void {
+  const valid = [...new Set(ids.filter((id) => !!getToolchain(id)))];
+  setSetting(repoPinKey(repo), JSON.stringify(valid));
+}
+/** Pin/unpin a single toolchain for a repo. */
+export function pinRepoToolchain(repo: string, id: string, on: boolean): void {
+  const cur = new Set(repoToolset(repo));
+  if (on) cur.add(id); else cur.delete(id);
+  setRepoToolset(repo, [...cur]);
+}
+/** ":"-joined bin dirs for a repo's pinned toolchains — folded onto PATH for that repo's runs.
+ *  Only toolchains with a known bin dir contribute; empty string when the repo has no pins. */
+export function repoToolchainPath(repo: string): string {
+  return repoToolset(repo)
+    .map((id) => getToolchain(id))
+    .map((tc) => (tc && tc.binDir ? tc.binDir : ""))
+    .filter(Boolean)
+    .join(":");
+}
+
 // ---- live install stream (a dedicated channel, kept off the agent board) --
 
 export interface TcEvent {

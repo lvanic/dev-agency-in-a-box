@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getSetting, setSetting } from "./store.js";
 import { ghBotToken } from "./creds.js";
-import { TOOLCHAINS } from "./toolchains.js";
+import { TOOLCHAINS, repoToolchainPath } from "./toolchains.js";
 
 export interface CheckResult { name: string; cmd: string; ok: boolean; firstError: string; env?: boolean }
 /**
@@ -261,7 +261,10 @@ export async function ensureDepsInstalled(workdir: string, repo: string, onLog?:
 export async function runChecks(workdir: string, repo: string): Promise<ChecksOutcome> {
   const set = detectCommands(workdir, repo);
   if (!set) return { ran: false, pass: false, verified: false, summary: "", results: [] };
-  const extraPath = set.binDir;
+  // Fold this repo's pinned toolchains onto PATH (additive — never removes the detected binDir), so a
+  // repo can carry extra tools beyond what auto-detection picks. Shared installs, no per-repo copies.
+  const repoPath = repoToolchainPath(repo);
+  const extraPath = [set.binDir, repoPath].filter(Boolean).join(":");
   // Toolchain missing. If it's one we manage (Flutter, Rust), DON'T clone it inline — signal
   // `neededToolchain` so the pipeline pauses the issue and asks the user to install it once from
   // Settings → Environments (persistent). Otherwise defer to the LLM tester / a local run. Either
