@@ -135,6 +135,35 @@ export function renderHandoffLine(h: HandoffInput | Handoff): string {
 }
 
 /**
+ * The "structured status → templated prose" translate (token-optimization-plan-2026-07-27): turn the
+ * compact machine Handoff into ONE readable human status line, deterministically and at zero token
+ * cost. This is what lets an agent emit only the terse HANDOFF envelope (cheap) while the human still
+ * gets a clean sentence — so no agent tokens are spent narrating "tests passed, moving to review".
+ */
+export function renderHandoffStatus(h: Handoff): string {
+  const round = typeof h.round === "number" && h.round > 0 ? ` (round ${h.round})` : "";
+  const files = h.files && h.files.length ? ` · ${h.files.length} file${h.files.length > 1 ? "s" : ""}` : "";
+  switch (h.phase) {
+    case "plan":
+      return h.q ? `❓ Needs your input: ${h.q}` : "📋 Plan ready for your approval.";
+    case "dev":
+      return `🔨 Building${h.br ? ` on \`${h.br}\`` : ""}${files}.`;
+    case "test":
+      return h.test === "f" ? `❌ Tests failed${round}.` : h.test === "p" ? `✅ Tests passed${round}.` : `🧪 Running tests${round}.`;
+    case "review":
+      return h.verdict === "a" ? `✅ Reviewed — approved${round}.`
+        : h.verdict === "c" ? `📝 Reviewed — changes requested${round}.`
+        : `🔍 Reviewing${round}.`;
+    case "revise":
+      return `🔧 Addressing feedback${round}${files}.`;
+    case "done":
+      return "🎉 Done.";
+    default:
+      return h.phase;
+  }
+}
+
+/**
  * Pull a structured Handoff out of an agent's reply: the first non-blank line (`HANDOFF {...}`) or a
  * fenced single-line JSON block — whichever is present and valid. Returns the parsed Handoff (or null
  * if missing/malformed — the caller falls back to its own regex/keyword parser, per pipeline.ts's

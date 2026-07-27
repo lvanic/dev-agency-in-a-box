@@ -33,6 +33,7 @@ import { isStopRequested, isHoldRequested } from "./abort.js";
 import {
   buildHandoff,
   renderHandoffLine,
+  renderHandoffStatus,
   extractHandoffLine,
   REVIEWER_HANDOFF_INSTRUCTION,
   PLANNER_HANDOFF_INSTRUCTION,
@@ -702,7 +703,10 @@ async function build(
     const rv = parseReviewVerdict(review.text);
     if (!rv.structured) warnFallbackParse(repo, issue.number, "reviewer", "reviewer reply missing a valid structured HANDOFF line — fell back to the APPROVE/REQUEST CHANGES keyword parse.");
     lastReview = rv.rest; lastVerdict = rv.verdict;
-    await say(repo, issue.number, "reviewer", `**Review (round ${reviews})**\n\n${rv.rest}`);
+    // Deterministic status line from the machine verdict (the reviewer no longer writes prose status) +
+    // the reviewer's human notes below it.
+    const revStatus = renderHandoffStatus({ v: 1, phase: "review", verdict: rv.verdict === "approved" ? "a" : "c", round });
+    await say(repo, issue.number, "reviewer", `${revStatus}\n\n${rv.rest}`);
 
     // filesChanged/trivialFeedback (P3): conservative downshift signals — how big is the diff being
     // reviewed, and did this review's ask read as purely mechanical. Best-effort; a git error just
