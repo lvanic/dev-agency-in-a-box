@@ -62,7 +62,9 @@ export const TOOLCHAINS: Record<string, Toolchain> = {
       // Wipe any partial clone first: a killed install leaves a non-empty $DIR without bin/flutter, and
       // `git clone` into a non-empty dir fails ("destination path already exists") — so a retry would
       // never recover without this. Only runs when the SDK isn't already good.
-      'if [ ! -x "$DIR/bin/flutter" ]; then rm -rf "$DIR"; mkdir -p "$(dirname "$DIR")"; git clone --depth 1 -b stable https://github.com/flutter/flutter.git "$DIR"; fi',
+      // --progress FORCES git's download meter onto stderr; without it git stays silent when its output
+      // is a pipe (which it always is here), so the UI bar would sit frozen at 0% with no feedback.
+      'if [ ! -x "$DIR/bin/flutter" ]; then rm -rf "$DIR"; mkdir -p "$(dirname "$DIR")"; git clone --progress --depth 1 -b stable https://github.com/flutter/flutter.git "$DIR"; fi',
       '"$DIR/bin/flutter" --version',
       '"$DIR/bin/flutter" precache --universal || true',
     ].join("\n"),
@@ -310,6 +312,15 @@ export async function installToolchain(id: string): Promise<void> {
   progress.set(id, { pct: 0, phase: "Starting…", log: [] });
   emit({ id, kind: "status", status: "installing" });
   emit({ id, kind: "progress", pct: 0, phase: "Starting…" });
+  // Heartbeat: some phases (e.g. flutter precache extracting) emit nothing for a while. Tick the phase
+  // with elapsed seconds so the UI always looks alive instead of frozen. `p.phase` stays clean (the
+  // elapsed is only in the emitted string) so a real progress line still overrides it.
+  const startedAt = Date.now();
+  const beat = setInterval(() => {
+    const p = progress.get(id); if (!p) return;
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    emit({ id, kind: "progress", pct: p.pct, phase: `${p.phase} · ${secs}s` });
+  }, 2500);
   try {
     mkdirSync(toolchainsDir(), { recursive: true });
     const r = await runStreaming(tc.install, toolchainsDir(), 1_800_000, (line) => {
@@ -354,6 +365,7 @@ export async function installToolchain(id: string): Promise<void> {
     writeState(id, { status: "failed", error, at: Date.now() });
     emit({ id, kind: "status", status: "failed", error });
   } finally {
+    clearInterval(beat);
     installing.delete(id);
   }
 }

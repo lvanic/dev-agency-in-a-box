@@ -55,6 +55,7 @@ export function EnvironmentsSection({ admin }) {
   const presets = list.filter((t) => !t.custom), custom = list.filter((t) => t.custom);
   const rowProps = (t) => ({ t, admin, busy: busy[t.id], live: live[t.id], onInstall: () => install(t.id), onRemove: () => remove(t.id) });
   return html`<div>
+    <style>@keyframes tcIndet{0%{transform:translateX(-120%)}100%{transform:translateX(340%)}}.tc-indet{border-radius:3px;animation:tcIndet 1.1s ease-in-out infinite}</style>
     <div class="sec">Environments</div>
     <div class="muted" style="font-size:12px;margin-bottom:12px">Install language toolchains so agents can run checks for these app types in-agency. When a run needs one that isn't here, it pauses the issue and asks — no PR until the checks actually run. Installed to <code>${tc.dir}</code> (persists across redeploys).</div>
     ${presets.map((t) => TcRow(rowProps(t)))}
@@ -64,7 +65,11 @@ export function EnvironmentsSection({ admin }) {
 }
 function TcRow({ t, admin, busy, live, onInstall, onRemove }) {
   const ready = t.status === "ready", installing = t.status === "installing", failed = t.status === "failed";
-  const prog = installing ? (live || t.progress) : null;
+  // Always show a progress block while installing — even before the first line arrives — so the user
+  // gets immediate feedback instead of a bare spinner. `indeterminate` = running but no % yet: show a
+  // moving stripe rather than a bar stuck at 0%.
+  const prog = installing ? (live || t.progress || { pct: 0, phase: "Starting…", log: [] }) : null;
+  const indeterminate = !!prog && !prog.pct;
   const chip = ready
     ? html`<span class="statuschip s-ready"><${Icon} name="check" size=${12}/> ready</span>`
     : installing
@@ -81,9 +86,13 @@ function TcRow({ t, admin, busy, live, onInstall, onRemove }) {
       ${failed && t.error ? html`<div style="font-size:11px;margin-top:3px;color:var(--bad,#c33)">${t.error}</div>` : null}
       ${reqs.length ? html`<div style="font-size:11.5px;margin-top:5px">⏸ Requested by ${reqs.map((r) => (r.repo.split("/").pop()) + " #" + r.number).join(", ")}</div>` : null}
       ${prog ? html`<div style="margin-top:8px">
-        <div class="muted" style="display:flex;justify-content:space-between;font-size:11px"><span>${prog.phase || "Working…"}</span><span>${prog.pct || 0}%</span></div>
-        <div style="height:5px;border-radius:3px;background:var(--line,rgba(128,128,128,.2));overflow:hidden;margin-top:3px"><div style=${"height:100%;width:" + (prog.pct || 0) + "%;background:var(--accent,#3b82f6);transition:width .3s"}></div></div>
-        ${prog.log && prog.log.length ? html`<pre style="margin:6px 0 0;max-height:110px;overflow:auto;font-size:10.5px;line-height:1.45;background:var(--code-bg,rgba(128,128,128,.08));border-radius:5px;padding:6px 8px;white-space:pre-wrap;word-break:break-all">${prog.log.slice(-8).join("\n")}</pre>` : null}
+        <div class="muted" style="display:flex;justify-content:space-between;font-size:11px"><span>${prog.phase || "Working…"}</span><span>${indeterminate ? "" : (prog.pct || 0) + "%"}</span></div>
+        <div style="height:5px;border-radius:3px;background:var(--line,rgba(128,128,128,.2));overflow:hidden;margin-top:3px">${indeterminate
+          ? html`<div class="tc-indet" style="height:100%;width:35%;background:var(--accent,#3b82f6)"></div>`
+          : html`<div style=${"height:100%;width:" + (prog.pct || 0) + "%;background:var(--accent,#3b82f6);transition:width .3s"}></div>`}</div>
+        ${prog.log && prog.log.length
+          ? html`<pre style="margin:6px 0 0;max-height:110px;overflow:auto;font-size:10.5px;line-height:1.45;background:var(--code-bg,rgba(128,128,128,.08));border-radius:5px;padding:6px 8px;white-space:pre-wrap;word-break:break-all">${prog.log.slice(-8).join("\n")}</pre>`
+          : html`<div class="muted" style="font-size:11px;margin-top:5px">Downloading — large SDKs can take a few minutes. Runs in the background; you can leave this tab.</div>`}
       </div>` : null}
     </div>
     ${admin ? html`<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
