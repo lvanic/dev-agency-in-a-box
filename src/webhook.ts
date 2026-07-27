@@ -1026,6 +1026,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
             createdAt: r.createdAt,
             isAgency: true,
             incoming: false,
+            meta: r.meta ?? null,
           })),
           ...legacyRows,
         ].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));

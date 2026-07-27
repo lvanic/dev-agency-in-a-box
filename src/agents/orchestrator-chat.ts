@@ -15,7 +15,8 @@ import { recallWiring, RECALL_PROMPT } from "./recall.js";
 
 export interface HandoffIssue { title: string; scope: string; route?: string }
 export interface HandoffProposal { workflow: string; issues: HandoffIssue[] }
-export interface OrchReply { reply: string; proposal: HandoffProposal | null }
+export interface OrchQuestion { options: string[]; multi: boolean }
+export interface OrchReply { reply: string; proposal: HandoffProposal | null; question: OrchQuestion | null }
 
 const VALID_WF = new Set(["quick-fix", "full-build", "plan-only", "split"]);
 const ORCH_ROLE = "orchestrator";
@@ -50,6 +51,40 @@ export function parseHandoff(text: string): HandoffProposal | null {
 /** Strip the handoff block from the user-facing reply (the proposal is surfaced as a UI card). */
 function stripHandoff(text: string): string {
   return text.replace(/```handoff[\s\S]*?```/gi, "").trim();
+}
+
+const MAX_Q_OPTS = 6;
+/**
+ * Parse an optional trailing ```question block into clickable answer choices. Shape:
+ *   ```question
+ *   multi: false
+ *   - Pivot to Flutter
+ *   - Keep Expo
+ *   ```
+ * The question text itself stays in the prose reply (shown above the buttons); this only carries the
+ * choices. Returns null when absent/empty — the reply then renders as plain prose.
+ */
+export function parseQuestion(text: string): OrchQuestion | null {
+  const m = text.match(/```question\s*([\s\S]*?)```/i);
+  if (!m) return null;
+  let multi = false;
+  const options: string[] = [];
+  for (const raw of m[1].split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const mm = line.match(/^multi\s*:\s*(true|yes|1)\b/i);
+    if (mm) { multi = true; continue; }
+    if (/^multi\s*:/i.test(line)) continue; // multi: false
+    const opt = line.replace(/^[-*\d.)\]]+\s*/, "").trim();
+    if (opt) options.push(opt.slice(0, 120));
+  }
+  const uniq = [...new Set(options)].slice(0, MAX_Q_OPTS);
+  return uniq.length ? { options: uniq, multi } : null;
+}
+
+/** Strip the question block from the user-facing reply (the choices are surfaced as clickable UI). */
+function stripQuestion(text: string): string {
+  return text.replace(/```question[\s\S]*?```/gi, "").trim();
 }
 
 function loadPersona(): string {
@@ -162,7 +197,11 @@ export async function runOrchestratorChat(repo: string, userText: string): Promi
         `### Conversation so far\n${history || "(this is the first message)"}\n\n` +
         `The user just said:\n${userText}\n\n` +
         `Respond as the Orchestrator. Discuss and advise conversationally; only append a \`handoff\` block if the user is ready to create work. ` +
-        `In the handoff block, RECOMMEND the route per issue: end each issue line with \`{workflow: @build}\` (or another workflow trigger) for multi-step work, or \`{agent: @dev}\` / \`{agent: @review}\` / another single agent when one specialist suffices.`,
+        `In the handoff block, RECOMMEND the route per issue: end each issue line with \`{workflow: @build}\` (or another workflow trigger) for multi-step work, or \`{agent: @dev}\` / \`{agent: @review}\` / another single agent when one specialist suffices.\n\n` +
+        `When you ask the user to CHOOSE between discrete options, write the question in prose AND append a \`question\` fenced block so they can click instead of type — one option per line as a \`- \` bullet, ` +
+        `and a \`multi: true\` line only when several may be picked at once (omit it for a single pick). Example:\n` +
+        "```question\nmulti: false\n- Pivot to Flutter\n- Keep Expo\n- Something else\n```\n" +
+        `Use it for real either/or decisions, not for open-ended questions.`,
       cwd: workdir,
       model,
       provider,
@@ -191,8 +230,10 @@ export async function runOrchestratorChat(repo: string, userText: string): Promi
   turns = r.turns;
 
   const proposal = parseHandoff(text);
-  const reply = stripHandoff(text) || "(no response)";
-  appendOrchMsg(repo, "orchestrator", reply, proposal ? { proposal } : null);
+  const question = parseQuestion(text);
+  const reply = stripQuestion(stripHandoff(text)) || "(no response)";
+  const meta = (proposal || question) ? { ...(proposal ? { proposal } : {}), ...(question ? { question } : {}) } : null;
+  appendOrchMsg(repo, "orchestrator", reply, meta);
   recordRun(repo, 0, ORCH_ROLE, model, turns, "chat", 0);
-  return { reply, proposal };
+  return { reply, proposal, question };
 }

@@ -240,14 +240,14 @@ function currentRunId(repo: string, number: number): string {
  * MIRROR, not the source of truth. `mirrorPr`, when given, mirrors to that PR's conversation instead
  * of the issue's own (the PR-fix flow comments on the PR, not the tracked issue).
  */
-async function say(repo: string, number: number, role: RoleName, body: string, mirrorPr?: number): Promise<void> {
+async function say(repo: string, number: number, role: RoleName, body: string, mirrorPr?: number, meta?: Record<string, unknown> | null): Promise<void> {
   const runId = currentRunId(repo, number);
-  const id = appendRunMsg(repo, number, runId, role, "comment", body); // raw (unbadged) — clean for the digest
+  const id = appendRunMsg(repo, number, runId, role, "comment", body, meta ?? null); // raw (unbadged) — clean for the digest
   upsertIssueDigest(repo, number, role, body);
   // Broadcast the SAME badge-prefixed text /run-thread's initial load returns, so a live SSE append
   // renders identically to the history the client already loaded (Comment.js reads the badge off body).
   const formatted = `${renderBadge(role)}\n\n${body}`;
-  pushRunMsg(id, repo, number, runId, role, formatted);
+  pushRunMsg(id, repo, number, runId, role, formatted, true, meta ?? null);
   if (mirrorPr) await commentOnPr(repo, mirrorPr, formatted);
   else await commentOnIssue(repo, number, formatted);
 }
@@ -305,7 +305,7 @@ export function handoffBlock(repo: string, number: number, phase: HandoffPhase, 
   ].join("");
 }
 
-export type PlannerDecision = { kind: "questions" | "plan"; body: string; auto: boolean; structured: boolean };
+export type PlannerDecision = { kind: "questions" | "plan"; body: string; auto: boolean; structured: boolean; opts?: string[]; multi?: boolean };
 
 /** Legacy fallback: first-word keyword sniff (QUESTIONS / PLAN [AUTO]). Used only when the planner's
  *  reply doesn't carry a valid structured `HANDOFF` first line (models sometimes drift) — never a
@@ -329,13 +329,22 @@ function parsePlannerDecisionFallback(text: string): PlannerDecision {
  */
 export function parsePlannerDecision(text: string): PlannerDecision {
   const { handoff, rest } = extractHandoffLine(text);
-  if (handoff && handoff.phase === "plan" && handoff.q) return { kind: "questions", body: rest || handoff.q, auto: false, structured: true };
+  if (handoff && handoff.phase === "plan" && handoff.q) return { kind: "questions", body: rest || handoff.q, auto: false, structured: true, opts: handoff.opts, multi: handoff.multi };
   if (handoff && handoff.phase === "dev") return { kind: "plan", body: rest, auto: true, structured: true };
   if (handoff && handoff.phase === "plan") return { kind: "plan", body: rest, auto: false, structured: true };
   // `rest` (not the raw `text`): extractHandoffLine already strips a HANDOFF-TAGGED line even when its
   // JSON fails to decode, so a malformed envelope never blocks the fallback from finding a legit
   // QUESTIONS/PLAN AUTO/PLAN keyword on the next line.
   return parsePlannerDecisionFallback(rest);
+}
+
+/** Build the `{question}` run-thread meta from a planner decision, so the dashboard renders the
+ *  answer choices as clickable buttons/checkboxes. Returns null when the question has no options
+ *  (text-only ask) — the message then renders as plain prose, unchanged. */
+function questionMeta(decision: PlannerDecision): { question: { options: string[]; multi: boolean } } | null {
+  const opts = (decision.opts || []).map((o) => String(o).trim()).filter(Boolean);
+  if (!opts.length) return null;
+  return { question: { options: opts, multi: Boolean(decision.multi) } };
 }
 
 /** Run the Planner once. Returns the decision and the model used (for the ledger). */
@@ -778,8 +787,11 @@ async function runDeveloperPipeline(
 
   // 1. Planner — research + recommend (only asks questions if genuinely blocked).
   const decision = await plan(repo, issue, workdir, thread);
-  if (decision.kind === "questions" && decision.body.replace(/\s+/g, " ").trim().length >= 12) {
-    await say(repo, issue.number, "planner", `**A few questions before I plan**\n\n${decision.body}`);
+  // A question ALWAYS pauses when it carries clickable options — a short "A or B?" must never fall
+  // through the length guard and silently build (the "started without feedback" bug). Text-only
+  // questions still need real content (>=12 chars) to be worth blocking on.
+  if (decision.kind === "questions" && (questionMeta(decision) || decision.body.replace(/\s+/g, " ").trim().length >= 12)) {
+    await say(repo, issue.number, "planner", `**A few questions before I plan**\n\n${decision.body}`, undefined, questionMeta(decision));
     await pause(repo, issue, "awaitingAnswer");
     console.log(`[agency] ${repo} #${issue.number} -> awaiting answer.`);
     return;
@@ -853,7 +865,7 @@ async function runSpecialist(
 
     const decision = await plan(repo, issue, workdir, thread);
     if (decision.kind === "questions") {
-      await say(repo, issue.number, "planner", `**A few questions**\n\n${decision.body}`);
+      await say(repo, issue.number, "planner", `**A few questions**\n\n${decision.body}`, undefined, questionMeta(decision));
       recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "awaitingAnswer"));
       return;
     }

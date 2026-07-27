@@ -1297,6 +1297,22 @@ textarea{resize:vertical;min-height:64px}
 .oprop-done .oprop-h{color:var(--green)}
 .oprop-created{display:flex;flex-direction:column;gap:4px;margin-bottom:6px}
 .oprop-link{text-align:left;border:none;background:transparent;color:var(--accent);font-size:13px;cursor:pointer;padding:2px 0;font-weight:500}
+/* OptionPicker — clickable answer choices an agent attaches to a question (orchestrator chat + run
+   thread). Single-pick = buttons; multi-pick = checkboxes + submit. */
+.optpick{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.optpick-multi{flex-direction:column;align-items:flex-start;gap:6px}
+.optpick-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font:600 13px inherit;padding:7px 13px;border-radius:10px;cursor:pointer;transition:background .12s,color .12s;text-align:left;line-height:1.35}
+.optpick-btn:hover:not(:disabled){background:var(--accent);color:#fff}
+.optpick-btn:disabled{opacity:.5;cursor:default}
+.optpick-submit{margin-top:2px}
+.optpick-chk{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink);cursor:pointer;padding:5px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);width:auto;max-width:100%}
+.optpick-chk.on{border-color:var(--accent);background:var(--accent-weak)}
+.optpick-chk input{position:absolute;opacity:0;width:0;height:0}
+.optpick-box{flex:none;width:17px;height:17px;border:1.5px solid var(--line);border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fff}
+.optpick-chk.on .optpick-box{background:var(--accent);border-color:var(--accent)}
+.optpick-box svg{opacity:0}
+.optpick-chk.on .optpick-box svg{opacity:1}
+.optpick-done{display:inline-flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;font-weight:600;color:var(--green)}
 /* Frames the shared ChatComposer (same wrapper shape as .dcompose in Detail.js — that one's
    known-good). Used to be display:flex plus its own raw textarea rules from before this mounted
    ChatComposer; those non-important rules (background/border/padding, same specificity as

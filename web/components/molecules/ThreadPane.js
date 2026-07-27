@@ -9,7 +9,7 @@ import { EpicChecklist } from "./EpicChecklist.js";
 
 export function ThreadPane({
   issue, repo, number, act, data, onOpenIssue, onClose, onOpenModels,
-  thread, loadThread, editComment, pendingComments,
+  thread, loadThread, editComment, pendingComments, onPick,
   chatRef, onChatScroll, chatAtTop, chatAtBottom,
   running, review, pr, conflict, conflictFiles, armed, confirmAct,
 }) {
@@ -69,8 +69,12 @@ export function ThreadPane({
             // If exactly one agent replied, editing must halt that agent. If >1, no edit — only stop.
             const onEditFn = editable ? editComment : null;
             const onStop = (isLastHuman && agentsAfter >= 1 && running) ? (() => act.stop(repo, number)) : null;
+            // Clickable answer choices (agent asked a question): active only on the LAST comment while
+            // the run is paused waiting — picking sends the choice as a normal reply.
+            const question = (c.meta && c.meta.question) || null;
+            const pickActive = n === cs.length - 1 && !running;
             // editable+1-agent: saving the edit should also halt that one agent so it re-reads the edit.
-            return html`<${Comment} key=${c.localId || c.id || c.createdAt} id=${c.id} author=${c.author} createdAt=${c.createdAt} body=${c.body} isAgency=${c.isAgency} incoming=${c.incoming} avatars=${(data && data.config && data.config.avatars) !== "off"} onEdit=${onEditFn} editable=${editable} agentsAfter=${isLastHuman ? agentsAfter : 0} onStopAgent=${onStop}/>`;
+            return html`<${Comment} key=${c.localId || c.id || c.createdAt} id=${c.id} author=${c.author} createdAt=${c.createdAt} body=${c.body} isAgency=${c.isAgency} incoming=${c.incoming} avatars=${(data && data.config && data.config.avatars) !== "off"} onEdit=${onEditFn} editable=${editable} agentsAfter=${isLastHuman ? agentsAfter : 0} onStopAgent=${onStop} question=${question} onPick=${onPick} pickActive=${pickActive}/>`;
           });
         })()}
         ${pendingComments.map((p) => html`<${Comment} key=${"skel-" + p.id} author=${p.author} createdAt=${p.createdAt} body=${p.body} isAgency=${false} isSkel=${true}/>`)}

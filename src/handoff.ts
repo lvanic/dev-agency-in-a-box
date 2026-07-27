@@ -42,11 +42,17 @@ export interface Handoff {
   round?: number;
   /** A short open question or note (e.g. the planner's clarifying ask). Capped, see MAX_Q_LEN. */
   q?: string;
+  /** Clickable answer choices for `q` (renders as buttons/checkboxes in the run thread). Capped, see MAX_OPTS. */
+  opts?: string[];
+  /** True → `opts` is a multi-select (checkboxes + submit); false/omitted → single-pick buttons. */
+  multi?: boolean;
 }
 
-const ALLOWED_KEYS: ReadonlySet<string> = new Set(["v", "phase", "br", "files", "test", "verdict", "round", "q"]);
+const ALLOWED_KEYS: ReadonlySet<string> = new Set(["v", "phase", "br", "files", "test", "verdict", "round", "q", "opts", "multi"]);
 const MAX_FILES = 12;
 const MAX_Q_LEN = 240;
+const MAX_OPTS = 6;
+const MAX_OPT_LEN = 120;
 
 /** Input to encodeHandoff/buildHandoff — every field but `phase` is optional (and dropped when empty). */
 export type HandoffInput = Partial<Omit<Handoff, "v" | "phase">> & { phase: HandoffPhase };
@@ -64,6 +70,10 @@ export function encodeHandoff(h: HandoffInput): string {
   if (h.verdict) out.verdict = h.verdict;
   if (typeof h.round === "number" && Number.isFinite(h.round) && h.round > 0) out.round = h.round;
   if (h.q && h.q.trim()) out.q = h.q.trim().slice(0, MAX_Q_LEN);
+  if (h.opts && h.opts.length) {
+    const opts = h.opts.map((o) => String(o).trim()).filter(Boolean).slice(0, MAX_OPTS).map((o) => o.slice(0, MAX_OPT_LEN));
+    if (opts.length) { out.opts = opts; if (h.multi) out.multi = true; }
+  }
   return JSON.stringify(out);
 }
 
@@ -110,6 +120,15 @@ export function decodeHandoff(s: string): Handoff | null {
   if (o.q !== undefined) {
     if (typeof o.q !== "string") return null;
     out.q = o.q;
+  }
+  if (o.opts !== undefined) {
+    if (!Array.isArray(o.opts) || !o.opts.every((x) => typeof x === "string")) return null;
+    const opts = (o.opts as string[]).map((x) => x.trim()).filter(Boolean);
+    if (opts.length) out.opts = opts;
+  }
+  if (o.multi !== undefined) {
+    if (typeof o.multi !== "boolean") return null;
+    if (o.multi) out.multi = true;
   }
   return out;
 }
@@ -236,4 +255,9 @@ export const PLANNER_HANDOFF_INSTRUCTION =
   "(keep q short — a few words; ask in full below); " +
   '{"v":1,"phase":"dev"} if this is small enough to build right away with no approval step (your ' +
   'default); or {"v":1,"phase":"plan"} if you have a plan that should be proposed for approval first ' +
-  "(large or cross-cutting change). Put the full questions/plan in prose on the lines after it.";
+  "(large or cross-cutting change). Put the full questions/plan in prose on the lines after it. " +
+  "When your question has DISCRETE answer choices, add them so the human can click instead of type: " +
+  'set `"opts"` to the list of choices (max 6, short labels), e.g. ' +
+  '{"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}. ' +
+  'Add `"multi":true` only when the human may pick SEVERAL choices at once (select-all-that-apply); ' +
+  "omit it for a single pick. Still write the full question in prose below the line.";

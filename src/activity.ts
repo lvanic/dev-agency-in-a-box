@@ -25,6 +25,7 @@ export interface ActivityEvent {
   runId?: string; // "run_msg" only — groups messages from the same press-Start/Resume
   msgId?: number; // "run_msg" only — the run_msg row id, so the client can de-dupe against its initial load
   isAgency?: boolean; // "run_msg" only — agent (badge-prefixed, avatar) vs. human reply
+  meta?: Record<string, unknown> | null; // "run_msg" only — structured payload (e.g. {question} clickable options)
 }
 
 // Units of work currently running (concurrent → can be several at once).
@@ -94,8 +95,8 @@ export function subscribe(fn: (e: ActivityEvent) => void): () => void {
  *  Detail run-thread panel needs no polling. The row is already durable (run_msg, written by the
  *  caller first per ADR-0001), so — unlike pushActivity — this ONLY notifies subscribers; it never
  *  touches the `activity` table or its bounded in-memory buffer. */
-export function pushRunMsg(msgId: number, repo: string, number: number, runId: string, role: string, text: string, isAgency = true): void {
-  const event: ActivityEvent = { ts: Date.now(), repo, number, role, kind: "run_msg", text, runId, msgId, isAgency };
+export function pushRunMsg(msgId: number, repo: string, number: number, runId: string, role: string, text: string, isAgency = true, meta: Record<string, unknown> | null = null): void {
+  const event: ActivityEvent = { ts: Date.now(), repo, number, role, kind: "run_msg", text, runId, msgId, isAgency, meta };
   for (const fn of subscribers) {
     try {
       fn(event);

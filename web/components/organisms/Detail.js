@@ -145,7 +145,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
       const key = "rm-" + (a.msgId || (a.runId + "|" + a.ts));
       if (appliedMsgRef.current.has(key)) continue;
       appliedMsgRef.current.add(key);
-      additions.push({ id: 0, localId: key, author: a.isAgency === false ? (a.role || "you") : "dev-agency", body: a.text, createdAt: new Date(a.ts).toISOString(), isAgency: a.isAgency !== false, incoming: false });
+      additions.push({ id: 0, localId: key, author: a.isAgency === false ? (a.role || "you") : "dev-agency", body: a.text, createdAt: new Date(a.ts).toISOString(), isAgency: a.isAgency !== false, incoming: false, meta: a.meta || null });
     }
     if (additions.length) {
       setThread((prev) => (prev && Array.isArray(prev.comments) ? { ...prev, comments: prev.comments.concat(additions) } : prev));
@@ -335,7 +335,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   const chatPane = html`<${ThreadPane}
     issue=${issue} repo=${repo} number=${number} act=${act} data=${data}
     onOpenIssue=${onOpenIssue} onClose=${onClose} onOpenModels=${onOpenModels}
-    thread=${thread} loadThread=${loadThread} editComment=${editComment} pendingComments=${pendingComments}
+    thread=${thread} loadThread=${loadThread} editComment=${editComment} pendingComments=${pendingComments} onPick=${sendFull}
     chatRef=${chatRef} onChatScroll=${onChatScroll} chatAtTop=${chatAtTop} chatAtBottom=${chatAtBottom}
     running=${running} review=${review} pr=${pr} conflict=${conflict} conflictFiles=${conflictFiles}
     armed=${armed} confirmAct=${confirmAct}

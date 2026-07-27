@@ -7,8 +7,9 @@ import { Spinner } from "../atoms/Spinner.js";
 import { md } from "../../lib/markdown.js";
 import { ago } from "../../lib/format.js";
 import { commentBadge, roleFromComment, stripBadge } from "../../lib/comment-badge.js";
+import { OptionPicker } from "./OptionPicker.js";
 
-export function Comment({ id, author, createdAt, body, isAgency, isSkel, incoming, avatars = true, onEdit, editable = false, agentsAfter = 0, onStopAgent = null }) {
+export function Comment({ id, author, createdAt, body, isAgency, isSkel, incoming, avatars = true, onEdit, editable = false, agentsAfter = 0, onStopAgent = null, question = null, onPick = null, pickActive = false }) {
   const [editing, setEditing] = useState(false);
   const [editVal, setEditVal] = useState(body || "");
   const [saving, setSaving] = useState(false);
@@ -33,5 +34,6 @@ export function Comment({ id, author, createdAt, body, isAgency, isSkel, incomin
         <button class="btn primary" disabled=${saving} onClick=${save}>${saving ? html`<${Spinner} size=${13}/>` : "Save"}</button>
       </div>
     ` : html`<div class="b" dangerouslySetInnerHTML=${{ __html: md(isAgency ? stripBadge(body) : body) }}></div>`}
+    ${question && !editing ? html`<${OptionPicker} question=${question} onPick=${onPick} disabled=${!pickActive}/>` : null}
   </div>`;
 }

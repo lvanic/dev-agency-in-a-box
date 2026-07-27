@@ -7,6 +7,7 @@ import { Avatar } from "../atoms/Avatar.js";
 import { Icon } from "../atoms/Icon.js";
 import { Spinner } from "../atoms/Spinner.js";
 import { ChatComposer } from "../molecules/ChatComposer.js";
+import { OptionPicker } from "../molecules/OptionPicker.js";
 import { api, getJSON } from "../../lib/api.js";
 import { md } from "../../lib/markdown.js";
 import { toast } from "../../lib/toast.js";
@@ -55,13 +56,15 @@ function ProposalCard({ repo, proposal, reload, onOpenIssue }) {
   </div>`;
 }
 
-function Bubble({ m, repo, reload, onOpenIssue }) {
+function Bubble({ m, repo, reload, onOpenIssue, onPick, active }) {
   const isUser = m.role === "user";
   const proposal = m.meta && m.meta.proposal ? m.meta.proposal : null;
+  const question = m.meta && m.meta.question ? m.meta.question : null;
   return html`<div class=${"obub " + (isUser ? "obub-user" : "obub-orch")}>
     ${isUser ? null : html`<span class="obub-av"><${Avatar} role="orchestrator" size=${26} crop="head"/></span>`}
     <div class="obub-body">
       <div class="obub-txt" dangerouslySetInnerHTML=${{ __html: md(m.text || "") }}></div>
+      ${question ? html`<${OptionPicker} question=${question} onPick=${onPick} disabled=${!active}/>` : null}
       ${proposal ? html`<${ProposalCard} repo=${repo} proposal=${proposal} reload=${reload} onOpenIssue=${onOpenIssue}/>` : null}
     </div>
   </div>`;
@@ -124,7 +127,7 @@ export function Orchestrator({ repos, repoFilter, setRepoFilter, reload, onOpenI
         </button>`; })}
       </div>` : null}
       ${loading ? html`<div class="empty" style="padding:30px;text-align:center"><${Spinner} size=${18}/></div>`
-        : thread.length ? thread.map((m) => html`<${Bubble} key=${m.id} m=${m} repo=${repo} reload=${reload} onOpenIssue=${onOpenIssue}/>`)
+        : thread.length ? thread.map((m, i) => html`<${Bubble} key=${m.id} m=${m} repo=${repo} reload=${reload} onOpenIssue=${onOpenIssue} onPick=${sendFull} active=${i === thread.length - 1 && !busy}/>`)
         : html`<div class="orch-empty">
             <div class="obki"><${Icon} name="sparkles" size=${26}/></div>
             <div class="obh">What can I help with in ${repoLabel}?</div>

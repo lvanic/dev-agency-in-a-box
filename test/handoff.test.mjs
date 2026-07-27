@@ -171,3 +171,25 @@ test("buildHandoff composes DB state (files, review verdict) with caller-known f
   const overridden = buildHandoff(repo, n, "review", { verdict: "a" });
   assert.equal(overridden.verdict, "a");
 });
+
+test("encodeHandoff/decodeHandoff round-trip clickable question options (opts + multi)", () => {
+  const wire = encodeHandoff({ v: 1, phase: "plan", q: "Flutter or Expo?", opts: ["Pivot to Flutter", "Keep Expo", "Something else"], multi: false });
+  const h = decodeHandoff(wire);
+  assert.equal(h.phase, "plan");
+  assert.deepEqual(h.opts, ["Pivot to Flutter", "Keep Expo", "Something else"]);
+  assert.equal(h.multi, undefined, "multi:false is dropped (omitted), not serialized");
+
+  const m = decodeHandoff(encodeHandoff({ v: 1, phase: "plan", q: "Which platforms?", opts: ["iOS", "Android", "Web"], multi: true }));
+  assert.equal(m.multi, true);
+
+  // caps: >6 options trimmed to 6; blank options dropped
+  const capped = decodeHandoff(encodeHandoff({ v: 1, phase: "plan", q: "x", opts: ["a", "", "b", "c", "d", "e", "f", "g"] }));
+  assert.equal(capped.opts.length, 6);
+  assert.ok(!capped.opts.includes(""));
+});
+
+test("decodeHandoff rejects a malformed opts (non-array / non-string entries)", () => {
+  assert.equal(decodeHandoff('{"v":1,"phase":"plan","opts":"nope"}'), null);
+  assert.equal(decodeHandoff('{"v":1,"phase":"plan","opts":[1,2,3]}'), null);
+  assert.equal(decodeHandoff('{"v":1,"phase":"plan","multi":"yes"}'), null);
+});
