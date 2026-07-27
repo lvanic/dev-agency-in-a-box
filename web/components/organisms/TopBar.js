@@ -4,6 +4,7 @@
 // imported from there temporarily until those become organisms too.
 import { html, useState, useEffect } from "/web/vendor/standalone.mjs";
 import { Icon } from "../atoms/Icon.js";
+import { AgencyLogo } from "../atoms/AgencyLogo.js";
 import { Spinner } from "../atoms/Spinner.js";
 import { Modal } from "../atoms/Modal.js";
 import { api, getJSON } from "../../lib/api.js";
@@ -77,7 +78,7 @@ export function TopBar({ working, scanning, env, theme, setTheme, onSettings, on
     { icon: "settings", label: "Settings", fn: onSettings },
   ];
   return html`<div class="topbar">
-    <div class="brand"><${Icon} name="crown" size=${18}/> <span class="brandname">Dev Agency in a Box</span> ${env === "development" ? html`<span class="envbadge">DEV</span>` : null} ${working ? html`<span class="dot"></span>` : null}</div>
+    <div class="brand"><${AgencyLogo} size=${30}/> <span class="brandname">Dev Agency in a Box</span> ${env === "development" ? html`<span class="envbadge">DEV</span>` : null} ${working ? html`<span class="dot"></span>` : null}</div>
     <div class="spacer"></div>
     <${RepoDropdown} repos=${repos} repoFilter=${repoFilter} setRepoFilter=${setRepoFilter} onManageRepos=${onManageRepos}/>
     <div class="spacer"></div>
