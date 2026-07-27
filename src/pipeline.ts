@@ -66,7 +66,7 @@ import { runReflection } from "./reflect.js";
 import { runChecks, baselineFailures, parseDiscoveredChecks, rememberChecks } from "./checks.js";
 import { decideNext, type ModelHint } from "./orchestrator.js";
 import { withStatus, setBlocked, type BlockedReason } from "./state.js";
-import { TOOLCHAINS, recordToolchainRequest } from "./toolchains.js";
+import { TOOLCHAINS, recordToolchainRequest, installToolchain, isToolchainReady, isInstalling } from "./toolchains.js";
 
 /**
  * Run the project's checks the cheap way: deterministic command runner first (zero tokens), and only
@@ -457,11 +457,18 @@ async function parkUnverified(repo: string, issue: Issue, branch: string, needed
   recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "unverified"));
   const tc = neededToolchain ? TOOLCHAINS[neededToolchain] : undefined;
   if (tc) recordToolchainRequest(tc.id, repo, issue.number);
+  // Auto-install the missing toolchain (default on) and resume this issue when it's ready — no manual
+  // trip to Settings → Environments. The install is shared/idempotent; concurrent needs dedupe on the
+  // in-flight guard. Set `auto_install_toolchains` = "0" to fall back to the manual flow.
+  const autoInstall = tc && getSetting("auto_install_toolchains") !== "0" && !isToolchainReady(tc.id);
+  if (autoInstall && tc) { if (!isInstalling(tc.id)) void installToolchain(tc.id); }
   const ask = tc
-    ? `This project needs the **${tc.label}** toolchain to run its checks, and it isn't installed on the agency yet.\n\n➡️ Install it under **Settings → Environments**, then press **Recheck** on the card. No PR is opened until the checks actually run.`
+    ? (autoInstall
+      ? `This project needs the **${tc.label}** toolchain to run its checks. I'm **installing it now** on the agency — this issue resumes automatically when it's ready (watch progress in **Settings → Environments**). No PR until the checks actually run.`
+      : `This project needs the **${tc.label}** toolchain to run its checks, and it isn't installed on the agency yet.\n\n➡️ Install it under **Settings → Environments**, then press **Recheck** on the card. No PR is opened until the checks actually run.`)
     : `The checks couldn't run in the sandbox (missing toolchain / environment), so the change is **unverified** — not green. No PR is opened. Verify locally or in CI, or press **Recheck** once the environment can run it.`;
   await say(repo, issue.number, "tester", `⏸ **Paused — can't verify here.**\n\n${ask}\n\nYour work is safe on \`${branch}\`.`);
-  console.log(`[agency] ${repo} #${issue.number} -> paused (unverified${tc ? `, needs ${tc.id}` : ""}).`);
+  console.log(`[agency] ${repo} #${issue.number} -> paused (unverified${tc ? `, needs ${tc.id}${autoInstall ? ", auto-installing" : ""}` : ""}).`);
   return false;
 }
 

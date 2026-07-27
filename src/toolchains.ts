@@ -281,6 +281,8 @@ export interface TcEvent {
   status?: ToolchainStatus;
   version?: string;
   error?: string;
+  /** On a successful install: the issues that requested this toolchain, so they can be auto-resumed. */
+  resumed?: Array<{ repo: string; number: number }>;
 }
 const tcSubs = new Set<(e: TcEvent) => void>();
 /** Subscribe to live install events (progress %, log lines, status). Returns an unsubscribe fn. */
@@ -389,10 +391,13 @@ export async function installToolchain(id: string): Promise<void> {
         if (bin) { const v = await sh(`"${bin}" --version`, toolchainsDir(), 60_000, tc.binDir); version = (v.out.split("\n").map((l) => l.trim()).find(Boolean) || "").slice(0, 120); }
       } catch { /* version is best-effort */ }
       writeState(id, { status: "ready", version, at: Date.now(), error: undefined });
+      // Snapshot who was waiting on this toolchain BEFORE clearing, so the ready event can auto-resume
+      // those paused issues.
+      const resumed = readRequests().filter((r) => r.id === id).map((r) => ({ repo: r.repo, number: r.number }));
       clearToolchainRequests(id);
       const p = progress.get(id); if (p) { p.pct = 100; p.phase = "Ready"; }
       emit({ id, kind: "progress", pct: 100, phase: "Ready" });
-      emit({ id, kind: "status", status: "ready", version });
+      emit({ id, kind: "status", status: "ready", version, resumed });
     } else {
       const error = lastLine(r.out) || "install failed";
       writeState(id, { status: "failed", error, at: Date.now() });

@@ -2287,6 +2287,16 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
   // doesn't show a permanent spinner with a disabled button (no runner alive to ever finish it).
   reconcileStuckInstalls();
 
+  // Auto-resume: the moment a toolchain finishes installing, re-run every issue that paused waiting
+  // for it (parkUnverified recorded the request; installToolchain snapshots them into the ready event).
+  subscribeToolchains((e) => {
+    if (e.kind !== "status" || e.status !== "ready" || !e.resumed?.length || !resume) return;
+    for (const { repo, number } of e.resumed) {
+      console.log(`[agency] toolchain ${e.id} ready → auto-resume ${repo} #${number}`);
+      void resume(repo, number).catch(() => {});
+    }
+  });
+
   // Drain anything already queued at startup, then keep a slow safety poll.
   await trigger("startup");
   setInterval(() => void trigger("safety-poll"), safetyPollMs);
