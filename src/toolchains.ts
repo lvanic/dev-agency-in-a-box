@@ -59,7 +59,10 @@ export const TOOLCHAINS: Record<string, Toolchain> = {
     install: [
       "set -e",
       `DIR="${FLUTTER_DIR}"`,
-      'if [ ! -x "$DIR/bin/flutter" ]; then mkdir -p "$(dirname "$DIR")"; git clone --depth 1 -b stable https://github.com/flutter/flutter.git "$DIR"; fi',
+      // Wipe any partial clone first: a killed install leaves a non-empty $DIR without bin/flutter, and
+      // `git clone` into a non-empty dir fails ("destination path already exists") — so a retry would
+      // never recover without this. Only runs when the SDK isn't already good.
+      'if [ ! -x "$DIR/bin/flutter" ]; then rm -rf "$DIR"; mkdir -p "$(dirname "$DIR")"; git clone --depth 1 -b stable https://github.com/flutter/flutter.git "$DIR"; fi',
       '"$DIR/bin/flutter" --version',
       '"$DIR/bin/flutter" precache --universal || true',
     ].join("\n"),
@@ -271,6 +274,27 @@ const installing = new Set<string>();
 
 /** True while an install is in flight this process — the UI shows a spinner, repeat clicks are no-ops. */
 export function isInstalling(id: string): boolean { return installing.has(id); }
+
+/**
+ * Clear orphaned "installing" state left by an interrupted install. The `installing` set, the progress
+ * map, and the child bash all live only in this process, but the state store persists across restarts —
+ * so a redeploy/crash mid-install (Flutter is the heaviest and most likely to overlap one) leaves the
+ * store stuck at "installing" with no runner alive to ever finish it. The UI then shows a permanent
+ * spinner with a DISABLED button: no completion event, no way to retry. Run once at boot: a finished
+ * install is "ready" (its binary is on disk), otherwise "failed" with a note so Install re-enables.
+ */
+export function reconcileStuckInstalls(): void {
+  const all = readStates();
+  let changed = false;
+  for (const [id, st] of Object.entries(all)) {
+    if (st.status !== "installing" || installing.has(id)) continue;
+    all[id] = onDisk(getToolchain(id))
+      ? { ...st, status: "ready", at: Date.now() }
+      : { ...st, status: "failed", error: "Install was interrupted by a restart — click Install to retry.", at: Date.now() };
+    changed = true;
+  }
+  if (changed) setSetting("toolchains_state", JSON.stringify(all));
+}
 
 /**
  * Install a toolchain persistently. Fire-and-forget from the HTTP layer (it can take many minutes):

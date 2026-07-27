@@ -34,7 +34,7 @@ import { startDeviceFlow, pollDeviceToken, fetchGitHubUser } from "./github-oaut
 import { githubOAuthClientId, githubOAuthToken, githubIdentity } from "./creds.js";
 import { binaryAvailable } from "./runners/registry.js";
 import { installSpec, installCli, RUNNER_PACKAGES } from "./runners/install.js";
-import { allToolchains, getToolchain, toolchainStatus, isInstalling, listToolchainRequests, installToolchain, toolchainsDir, sharedBinDir, toolchainProgress, subscribeToolchains, addCustomToolchain, removeCustomToolchain } from "./toolchains.js";
+import { allToolchains, getToolchain, toolchainStatus, isInstalling, listToolchainRequests, installToolchain, toolchainsDir, sharedBinDir, toolchainProgress, subscribeToolchains, addCustomToolchain, removeCustomToolchain, reconcileStuckInstalls } from "./toolchains.js";
 import { parseLegacyStatus, withStatus, setBlocked } from "./state.js";
 import { runOrchestratorChat } from "./agents/orchestrator-chat.js";
 import { listOrchThread, clearOrchThread, setByAgent } from "./store.js";
@@ -2250,6 +2250,10 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
 
   // Webhook + collaborator registration happens in main() via ensureAllRepoAccess before
   // this server starts. Here we just serve and process.
+
+  // Clear any "installing" state orphaned by a redeploy/crash mid-install, so the Environments tab
+  // doesn't show a permanent spinner with a disabled button (no runner alive to ever finish it).
+  reconcileStuckInstalls();
 
   // Drain anything already queued at startup, then keep a slow safety poll.
   await trigger("startup");
