@@ -98,22 +98,17 @@ COPY memory ./memory
 COPY config ./config
 COPY web ./web
 COPY scripts ./scripts
-# Copy the repo history so scripts/version.mjs can derive the commit count, SHA, and the PR number
-# (from the squash-merge commit subject) — this is what powers the build stamp "V1 · YYMMDD · #PR".
-# Coolify's build context includes .git; relying on it here means the stamp works even when the
-# 'Include Source Commit in Build' (SOURCE_COMMIT) toggle is off.
-COPY .git ./.git
 
-# SOURCE_COMMIT stays as a secondary SHA source when .git is somehow unavailable (kept for parity).
+# NOTE: do NOT `COPY .git` here — some build contexts (shallow clone / git-archive export) have no
+# .git, and a hard COPY would FAIL the whole build and freeze deploys. So the build never depends on
+# git history; the build stamp's PR number stays best-effort and the "last merged PRs" tooltip (from
+# the GitHub API at runtime) is the reliable "what's live" signal.
+# Coolify injects the deployed commit when 'Include Source Commit in Build' is on; read as an env var.
 ARG SOURCE_COMMIT=""
 RUN npm run build
 
-# Re-stamp builtAt at image build (npm run build already ran scripts/version.mjs). .git is still
-# present, so this keeps the git-derived version/sha/pr intact and only refreshes the timestamp.
+# Re-stamp builtAt at image build (npm run build already ran scripts/version.mjs).
 RUN node scripts/version.mjs || true
-
-# Drop the history from the final image — the server never uses /app/.git at runtime.
-RUN rm -rf .git
 
 # Webhook mode listens here (ignored in watch/once mode).
 EXPOSE 3000
