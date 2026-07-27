@@ -10,7 +10,7 @@ import { claudeRunEnv } from "../runners/sdk-claude.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
-import { ROLES, modelFor, canonicalModel, roleTier, selectPlaybooks, type RoleName } from "./roles.js";
+import { ROLES, modelFor, canonicalModel, roleTier, selectPlaybooks, effortFor, type RoleName } from "./roles.js";
 import { tierModel, getIssueProvider, getIssueAgentModels, parseModelRef, fallbackFor, getIssueUseFallback, type Tier, type Provider } from "../db/providers.js";
 import { resolveTierModel, priceFor } from "./pricing.js";
 import { loadConstitution, loadPersona, loadPlaybooks } from "../memory.js";
@@ -487,6 +487,7 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
         resumeId,
         maxTurns,
         tokenCap,
+        effort: effortFor(def),
       },
       (message) => {
         // emitAssistant callback: same side-effects the old inline loop had (SDK path),
@@ -656,6 +657,7 @@ export async function runAnalyzerPrompt(prompt: string): Promise<{ text: string;
         abort: controller,
         maxTurns: def.maxTurns,
         tokenCap: loadBudget().maxTokensPerRun,
+        effort: effortFor(def),
       },
       () => {}, // no live activity feed — this run isn't tied to any issue card
     );

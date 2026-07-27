@@ -39,6 +39,8 @@ export interface LlmRunOptions {
   maxTurns: number;
   /** Forward-progress token kill-switch (0 disables). */
   tokenCap: number;
+  /** Thinking effort ('low'|'medium'|'high'); undefined = SDK default (high). */
+  effort?: string;
 }
 
 /**
@@ -73,6 +75,7 @@ export async function runLLM(opts: LlmRunOptions, emitAssistant: (message: unkno
     resumeId: opts.resumeId,
     maxTurns: opts.maxTurns,
     tokenCap: opts.tokenCap,
+    effort: opts.effort,
   };
   return runner.run(req, emitAssistant);
 }

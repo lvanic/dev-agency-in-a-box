@@ -56,6 +56,8 @@ export interface RunRequest {
   maxTurns: number;
   /** Forward-progress token kill-switch (0 disables). */
   tokenCap: number;
+  /** Thinking effort ('low'|'medium'|'high'); undefined = SDK default. Lowered for mechanical roles. */
+  effort?: string;
 }
 
 /** What a runner returns. roleAgent does the accounting (recordTokens/setSession/pushActivity). */

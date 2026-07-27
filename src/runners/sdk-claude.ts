@@ -125,6 +125,9 @@ export class ClaudeSdkRunner implements AgentRunner {
           // refuses --dangerously-skip-permissions as root) — see Dockerfile `USER node`.
           permissionMode: "bypassPermissions",
           includePartialMessages: true,
+          // Lower thinking effort for mechanical roles (undefined = SDK default 'high'). Guides
+          // adaptive-thinking depth so tester/librarian/analyzer stop burning deep-reasoning tokens.
+          ...(req.effort ? { effort: req.effort as "low" | "medium" | "high" } : {}),
           maxTurns: req.maxTurns,
           abortController: req.abort,
           stderr: (data: string) => {

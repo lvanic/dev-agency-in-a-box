@@ -46,6 +46,10 @@ export function canonicalModel(m: string): string {
 
 export type RoleName = "planner" | "decomposer" | "architect" | "developer" | "reviewer" | "tester" | "librarian" | "auditor" | "analyzer";
 
+/** Thinking-effort level passed to the SDK. 'high' is the SDK default (deep reasoning) — we only
+ *  LOWER it for mechanical roles, never raise it, to avoid degrading judgment work. */
+export type Effort = "low" | "medium" | "high";
+
 export interface RoleDef {
   name: RoleName;
   /** Markdown persona file under memory/central/agents/. */
@@ -67,6 +71,13 @@ export interface RoleDef {
    * these generous (mirrors Claude Code native, which runs to completion with no tight turn cap).
    */
   maxTurns: number;
+  /**
+   * Thinking effort. Omit = the SDK default ('high', deep reasoning) — right for judgment roles
+   * (developer/architect/reviewer/planner/auditor). Set LOW/MEDIUM for mechanical roles that don't
+   * need deep reasoning (running tests, distilling a lesson, a telemetry text pass) so they stop
+   * burning deep-thinking tokens for work that doesn't need them. Never raised above the default.
+   */
+  effort?: Effort;
 }
 
 const READ_TOOLS = ["Read", "Glob", "Grep"];
@@ -92,6 +103,7 @@ export const ROLES: Record<RoleName, RoleDef> = {
     modelEnv: "DECOMPOSER_MODEL",
     tools: READ_TOOLS,
     maxTurns: 50,
+    effort: "medium", // structured, parse-checked splitting — doesn't need deep reasoning
   },
   architect: {
     name: "architect",
@@ -140,6 +152,7 @@ export const ROLES: Record<RoleName, RoleDef> = {
     modelEnv: "TESTER_MODEL",
     tools: [...READ_TOOLS, "Bash"],
     maxTurns: 60,
+    effort: "low", // runs the suite + reports the first failures — mechanical, no deep reasoning needed
   },
   librarian: {
     name: "librarian",
@@ -150,6 +163,7 @@ export const ROLES: Record<RoleName, RoleDef> = {
     modelEnv: "LIBRARIAN_MODEL",
     tools: READ_TOOLS,
     maxTurns: 30,
+    effort: "low", // distilling a short reusable lesson — mechanical, no deep reasoning needed
   },
   auditor: {
     name: "auditor",
@@ -174,8 +188,17 @@ export const ROLES: Record<RoleName, RoleDef> = {
     modelEnv: "ANALYZER_MODEL",
     tools: [],
     maxTurns: 6,
+    effort: "low", // one no-tools text pass over a telemetry digest — no deep reasoning needed
   },
 };
+
+/** Effort for a role: its explicit setting, else undefined (the SDK default 'high'). A global
+ *  AGENT_EFFORT env can force a floor for all roles (e.g. cost-saving across the board). */
+export function effortFor(role: RoleDef): Effort | undefined {
+  const env = process.env.AGENT_EFFORT?.trim().toLowerCase();
+  if (env === "low" || env === "medium" || env === "high") return env;
+  return role.effort;
+}
 
 // Progressive disclosure (token-optimization-plan-2026-07-27): a role's playbook stack is the biggest
 // recurring slice of its system prompt (the developer loads 9). These DOMAIN playbooks are only worth
