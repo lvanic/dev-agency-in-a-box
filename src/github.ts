@@ -1110,28 +1110,50 @@ export async function fetchCheckout(workdir: string, branch: string): Promise<vo
   if (!ok) await runGit(workdir, ["checkout", branch]).catch(() => {}); // brand-new local branch
 }
 
-// A repo's base/default branch. Not every repo uses "main" — so resolve it per repo instead of
-// hardcoding: explicit override setting (repo_base.<repo>) wins; else the repo's real GitHub default
-// branch (detected once, cached); else "main". This is the single source of truth for PR base,
-// conflict probes, and the merge-base the agent rebases onto.
-const repoBaseCache = new Map<string, string>();
-export async function repoBaseBranch(repo: string): Promise<string> {
-  const override = (getSetting(`repo_base.${repo}`) || "").trim();
-  if (override) return override;
-  const cached = repoBaseCache.get(repo);
+// ── Per-repo branch model ────────────────────────────────────────────────────────────────────
+// Two named branches per repo, both user-settable (Settings → Repositories), both defaulting to the
+// repo's real GitHub default branch so an unconfigured repo behaves exactly as before:
+//   • PRODUCTION — the released/live branch. `promoteStagingToProduction` merges staging into it.
+//   • STAGING    — the integration branch agents open PRs against (dev happens against a live env).
+// Agent PRs, conflict probes and the merge-base ALL target STAGING via `repoBaseBranch` (kept as the
+// name every base call site already uses). When staging === production (the default), that is just
+// the old single-branch behavior. Legacy `repo_base.<repo>` still works — folded into staging.
+const repoDefaultCache = new Map<string, string>();
+async function detectDefaultBranch(repo: string): Promise<string> {
+  const cached = repoDefaultCache.get(repo);
   if (cached) return cached;
   let base = "main";
   try {
     const out = await gh(["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]);
     const detected = out.trim();
-    // NEVER use an agency work branch as a PR base. A repo pushed while empty adopts the FIRST pushed
-    // branch as its GitHub default — which for us is `agency/issue-N`. Using it as base means
-    // base == head, and `gh pr create` is rejected → the PR silently never opens and the (approved)
-    // issue parks as needs-attention. Fall back to "main"; ensureBaseExists() creates it if missing.
+    // NEVER treat an agency work branch as the default. A repo pushed while empty adopts the FIRST
+    // pushed branch as its GitHub default — which for us is `agency/issue-N`. Using it as base means
+    // base == head, and `gh pr create` is rejected. Fall back to "main"; ensureBaseExists() makes it.
     if (detected && !/^agency\//.test(detected)) base = detected;
   } catch { /* offline / no gh — fall back to main */ }
-  repoBaseCache.set(repo, base);
+  repoDefaultCache.set(repo, base);
   return base;
+}
+
+/** The repo's PRODUCTION (released) branch: `repo_production.<repo>` override, else the GitHub default. */
+export async function repoProductionBranch(repo: string): Promise<string> {
+  const override = (getSetting(`repo_production.${repo}`) || "").trim();
+  if (override) return override;
+  return detectDefaultBranch(repo);
+}
+
+/** The repo's STAGING (integration) branch: `repo_staging.<repo>` (or legacy `repo_base.<repo>`)
+ *  override, else = production. This is what agents open PRs against. */
+export async function repoStagingBranch(repo: string): Promise<string> {
+  const override = (getSetting(`repo_staging.${repo}`) || getSetting(`repo_base.${repo}`) || "").trim();
+  if (override) return override;
+  return repoProductionBranch(repo);
+}
+
+/** The base for agent PRs / conflict probes / merge-base = the STAGING branch. Single source of truth;
+ *  every existing base call site funnels through here, so pointing it at staging is all it takes. */
+export async function repoBaseBranch(repo: string): Promise<string> {
+  return repoStagingBranch(repo);
 }
 
 /** Does branch `name` exist on the remote? One cheap API read. */
@@ -1169,16 +1191,35 @@ async function ensureBaseExists(repo: string, base: string, head: string): Promi
   ]).then(() => true).catch(() => false);
   if (!made && !(await remoteBranchExists(repo, base))) return false; // create failed and still absent
   await gh(["api", "-X", "PATCH", `repos/${repo}`, "-f", `default_branch=${base}`]).catch(() => {});
-  repoBaseCache.set(repo, base);
+  repoDefaultCache.set(repo, base);
   console.log(`[agency] ${repo}: created missing base branch '${base}' (repo had no default besides '${head}')`);
   return true;
+}
+
+/**
+ * Make sure the STAGING branch exists so agent PRs can target it. When staging differs from
+ * production (a real staging setup) and is missing, branch it off PRODUCTION's current tip — so
+ * staging starts as a copy of the released code, NOT off an agency work branch, and the repo default
+ * is left untouched. Returns the resolved staging branch name.
+ */
+async function ensureStagingBranch(repo: string): Promise<string> {
+  const staging = await repoStagingBranch(repo);
+  const prod = await repoProductionBranch(repo);
+  if (staging === prod) return staging;                       // no distinct staging → old behavior
+  if (await remoteBranchExists(repo, staging)) return staging;
+  const prodSha = (await gh(["api", `repos/${repo}/git/ref/heads/${encodeURIComponent(prod)}`, "-q", ".object.sha"]).catch(() => "")).trim();
+  if (prodSha) {
+    const made = await gh(["api", "-X", "POST", `repos/${repo}/git/refs`, "-f", `ref=refs/heads/${staging}`, "-f", `sha=${prodSha}`]).then(() => true).catch(() => false);
+    if (made) console.log(`[agency] ${repo}: created staging branch '${staging}' from '${prod}'`);
+  }
+  return staging;
 }
 
 /** Open a draft PR for the branch if none exists; returns the PR (or null). */
 export async function ensureDraftPr(repo: string, issue: number, branch: string, title: string): Promise<PullRequest | null> {
   const existing = await findPrForBranch(repo, branch);
   if (existing) return existing;
-  const base = await repoBaseBranch(repo);
+  const base = await ensureStagingBranch(repo); // resolve + create staging (off production) if needed
   if (!(await ensureBaseExists(repo, base, branch))) {
     console.warn(`[agency] ${repo} #${issue}: cannot open PR — base '${base}' is missing/equal to head '${branch}'`);
     return null;
@@ -1192,6 +1233,55 @@ export async function ensureDraftPr(repo: string, issue: number, branch: string,
     console.warn(`[agency] ${repo} #${issue}: gh pr create failed — ${String((e as Error)?.message || e).slice(0, 200)}`);
   });
   return findPrForBranch(repo, branch);
+}
+
+/** Find an OPEN PR with this exact head→base pair (promote flow — findPrForBranch filters head only). */
+async function findOpenPr(repo: string, head: string, base: string): Promise<PullRequest | null> {
+  const out = await gh([
+    "pr", "list", "--repo", repo, "--head", head, "--base", base, "--state", "open",
+    "--json", "number,url,isDraft", "--limit", "1",
+  ]).catch(() => "[]");
+  const raw = JSON.parse(out) as Array<{ number: number; url: string; isDraft: boolean }>;
+  return raw.length ? raw[0] : null;
+}
+
+/**
+ * Promote: open (or reuse) a PR from STAGING → PRODUCTION and merge it as a MERGE COMMIT — history
+ * preserved, staging branch kept alive (never squashed/deleted, unlike an issue PR). Deterministic,
+ * no agent/tokens. Returns the PR url on success. No-op with a clear message when staging === prod or
+ * there's nothing to promote.
+ */
+export async function promoteStagingToProduction(repo: string): Promise<{ ok: boolean; url?: string; msg?: string }> {
+  const staging = await repoStagingBranch(repo);
+  const prod = await repoProductionBranch(repo);
+  if (staging === prod) {
+    return { ok: false, msg: `Staging and production are the same branch ('${prod}'). Set a distinct staging branch in Settings → Repositories first.` };
+  }
+  if (!(await remoteBranchExists(repo, staging))) {
+    return { ok: false, msg: `Staging branch '${staging}' doesn't exist yet — merge some work first.` };
+  }
+  await ensureBaseExists(repo, prod, staging); // create production if it somehow doesn't exist yet
+  let pr = await findOpenPr(repo, staging, prod);
+  if (!pr) {
+    await gh([
+      "pr", "create", "--repo", repo, "--base", prod, "--head", staging,
+      "--title", `Promote ${staging} → ${prod}`,
+      "--body", `Promote **${staging}** into **${prod}** (from the dev-agency dashboard).`,
+    ]).catch((e) => {
+      console.warn(`[agency] ${repo}: promote pr create failed — ${String((e as Error)?.message || e).slice(0, 200)}`);
+    });
+    pr = await findOpenPr(repo, staging, prod);
+  }
+  if (!pr) {
+    return { ok: false, msg: `Nothing to promote — '${staging}' has no commits ahead of '${prod}' (already up to date).` };
+  }
+  const merged = await gh(["pr", "merge", String(pr.number), "--repo", repo, "--merge"]).then(() => true).catch((e) => {
+    console.warn(`[agency] ${repo}: promote merge failed — ${String((e as Error)?.message || e).slice(0, 200)}`);
+    return false;
+  });
+  if (!merged) return { ok: false, url: pr.url, msg: `Opened promote PR ${pr.url} but the merge failed (conflicts or checks). Resolve it on GitHub.` };
+  console.log(`[agency] ${repo}: promoted ${staging} → ${prod} via ${pr.url}`);
+  return { ok: true, url: pr.url };
 }
 
 /** Parse `gh api repos/<repo> -q .permissions.push`'s raw stdout into a boolean. Exported for tests. */

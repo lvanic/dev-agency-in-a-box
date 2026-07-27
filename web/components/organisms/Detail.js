@@ -244,7 +244,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   const bz = (a) => act.isBusy(a, repo, number);
   const tico = (a, name) => bz(a) ? html`<${Spinner} size=${18}/>` : html`<${Icon} name=${name}/>`;
   // Run-the-app actions live in the issue toolbar (was a separate "Run the app" tile).
-  const runAppBtns = html`<${RunApp} repo=${repo} number=${number} appInfo=${appInfo} issue=${issue} done=${done}/>`;
+  const runAppBtns = html`<${RunApp} repo=${repo} number=${number} appInfo=${appInfo} issue=${issue} done=${done} repoBranches=${data && data.repoBranches}/>`;
   // Compact icon-only links (tooltips carry the meaning) so the toolbar stays uncluttered.
   if (issue.pr_url) tb.push(html`<a class="tbtn" data-tip="Open PR" href=${issue.pr_url} target="_blank" rel="noopener"><${Icon} name="pr"/></a>`);
   if (issue.previewUrl) tb.push(html`<a class="tbtn primary" data-tip="Open preview" href=${issue.previewUrl} target="_blank" rel="noopener"><${Icon} name="globe"/></a>`);

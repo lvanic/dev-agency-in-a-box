@@ -22,6 +22,13 @@ import { fileURLToPath } from "node:url";
 import type { Config } from "./config.js";
 import { recentRuns, roleRunsByIssue, filesFor, recentIssues, recentActivity, archiveIssue, spendSince, recordIssueState, recordIssueStatus, getIssueStatus, resetIssueData, listEpicChildren, recordPr, tokensSince, tokensByModelSince, tokensByRoleSince, tokensByDaySince, topIssuesByTokensSince, tokensByIssueAll, toolStatsSince, runStepCountSince, recentLessons, recordConflict, getConflict, clearConflict, listConflicts, epicsByParent, getSetting, setSetting, setAgentOverride, deleteAgentOverride, listAgentRevisions, getAgentRevision, addWatchedRepo, removeWatchedRepo, getProviders, setProviders, getRoleModels, setRoleModels, getGlobalModel, setGlobalModel, getFallbackChain, setFallbackChain, getAutoSwitchOnLimit, setIssueModelOverride, getIssueModelOverride, clearIssueModelOverride, setIssueWorkflow, getIssueWorkflow, clearIssueWorkflow, getWorkflow, getIssueProvider, setIssueProvider, clearIssueProvider, getIssueAgentModels, setIssueAgentModel, getIssueUseFallback, setIssueUseFallback, getReview, recordReview, listReviews, getAutoRaw, setAuto, autoEnabled, getIssueRow, clearRateLimited, getDb, listAgentDefs, upsertAgentDef, deleteAgentDef, listWorkflows, upsertWorkflow, deleteWorkflow, getDefaultWorkflowId, setDefaultWorkflowId, listSkills, upsertSkill, deleteSkill, listHooks, upsertHook, deleteHook, type AutoKind, type Provider, type AgentDef, type Skill, type Hook } from "./store.js";
 import { mergeEpic, isEpic, playEpic, onChildMerged, nextEpicChild } from "./epics.js";
+
+/** Map a run "target" to a branch name: issue (default) | staging | production. */
+async function resolveRunTarget(repo: string, number: number, target: string | null): Promise<string> {
+  if (target === "staging") return repoStagingBranch(repo);
+  if (target === "production" || target === "prod") return repoProductionBranch(repo);
+  return `agency/issue-${number}`;
+}
 import { versionInfo } from "./version.js";
 import { startDeviceFlow, pollDeviceToken, fetchGitHubUser } from "./github-oauth.js";
 import { githubOAuthClientId, githubOAuthToken, githubIdentity } from "./creds.js";
@@ -58,7 +65,7 @@ import { getConversation, conversationCount, foldInGitHubComment, recordOutgoing
 import { listRunThread, renderBadge } from "./store.js";
 import { recentFailuresSince } from "./store.js";
 import { effectiveRepos } from "./commands.js";
-import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists, createRepo } from "./github.js";
+import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists, createRepo, repoStagingBranch, repoProductionBranch, promoteStagingToProduction } from "./github.js";
 import { listAgentFiles, readAgentFile, isSafeAgentPath } from "./memory.js";
 import { listVault, getVaultEntry, upsertVaultEntry, deleteVaultEntry, decodeVaultEntry, listVaultRevisions } from "./store.js";
 import { renderVault, compressToEntries, canonicalLineOf } from "./vaultTranslate.js";
@@ -621,6 +628,13 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
               autoRepos: Object.fromEntries(
                 effectiveRepos(cfg).map((r) => [r, { resume: getAutoRaw("resume", r), merge: getAutoRaw("merge", r) }]),
               ),
+              // Per-repo staging/production branch overrides (empty = follow the repo's default branch).
+              repoBranches: Object.fromEntries(
+                effectiveRepos(cfg).map((r) => [r, {
+                  staging: getSetting(`repo_staging.${r}`) || getSetting(`repo_base.${r}`) || "",
+                  production: getSetting(`repo_production.${r}`) || "",
+                }]),
+              ),
               active: getActive(),
               inflight: inFlightKeys(),
               rateLimited: listRateLimited(),
@@ -910,7 +924,8 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         })();
         return;
       }
-      // Tauri/native: download a one-double-click .command that runs the PR on the user's Mac.
+      // Tauri/native: download a one-double-click .command that runs the app on the user's Mac.
+      // `target` picks the branch: issue (default) | staging | production.
       if (url === "/app-local") {
         const q = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
         const repo = q.get("repo") ?? "";
@@ -920,20 +935,23 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           res.writeHead(400).end("bad request");
           return;
         }
-        const script = buildLocalCommand(owner, name, `agency/issue-${number}`);
-        // raw=1 → serve as plain text so it can be piped straight into bash from Terminal
-        // (`curl … | bash`). This bypasses macOS Gatekeeper, which blocks unsigned downloaded
-        // .command files. Otherwise serve as a downloadable .command (legacy/fallback).
-        if (q.get("raw") === "1") {
-          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        void (async () => {
+          const branch = await resolveRunTarget(repo, number, q.get("target"));
+          const script = buildLocalCommand(owner, name, branch);
+          // raw=1 → serve as plain text so it can be piped straight into bash from Terminal
+          // (`curl … | bash`). This bypasses macOS Gatekeeper, which blocks unsigned downloaded
+          // .command files. Otherwise serve as a downloadable .command (legacy/fallback).
+          if (q.get("raw") === "1") {
+            res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+            res.end(script);
+            return;
+          }
+          res.writeHead(200, {
+            "content-type": "text/x-shellscript",
+            "content-disposition": `attachment; filename="${name}-${branch.replace(/[^\w.-]/g, "_")}.command"`,
+          });
           res.end(script);
-          return;
-        }
-        res.writeHead(200, {
-          "content-type": "text/x-shellscript",
-          "content-disposition": `attachment; filename="${name}-pr-${number}.command"`,
-        });
-        res.end(script);
+        })();
         return;
       }
 
@@ -1135,11 +1153,11 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
     }
 
     // Dashboard actions (auth required), not GitHub webhooks.
-    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/vault-save", "/vault-delete", "/vault-compress", "/app-run", "/app-stop", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
+    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/vault-save", "/vault-delete", "/vault-compress", "/app-run", "/app-stop", "/promote", "/repo-branches", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
-        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; priceOverrides?: Record<string, { in?: unknown; out?: unknown } | null>; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string; raw?: string; text?: string; hints?: string[] } = {};
+        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; priceOverrides?: Record<string, { in?: unknown; out?: unknown } | null>; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string; raw?: string; text?: string; hints?: string[]; target?: string; staging?: string; production?: string } = {};
         try {
           p = JSON.parse(body.toString("utf8"));
         } catch {
@@ -1629,7 +1647,8 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           return ok();
         }
         if (path === "/app-run") {
-          // Start a web preview (dev server + public tunnel) for the PR.
+          // Start a web preview (dev server + public tunnel). `target` picks the branch:
+          // issue (default) | staging | production.
           if (!repo || !number) return res.writeHead(400).end("{}");
           const pkg = await readRepoFile(repo, "package.json");
           let ds: string | null = null;
@@ -1639,7 +1658,24 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
             /* ignore */
           }
           if (!ds) return res.writeHead(409).end(JSON.stringify({ error: "no web dev script found" }));
-          void startApp(repo, number, ds);
+          const branch = await resolveRunTarget(repo, number, typeof p.target === "string" ? p.target : null);
+          void startApp(repo, number, ds, branch);
+          return ok();
+        }
+        if (path === "/promote") {
+          // Merge staging → production for the repo (PR opened + merged as a merge commit).
+          if (actor?.role !== "admin") return res.writeHead(403).end(JSON.stringify({ error: "admin only" }));
+          if (!repo) return res.writeHead(400).end(JSON.stringify({ error: "repo required" }));
+          const r = await promoteStagingToProduction(repo);
+          if (!r.ok) return res.writeHead(409).end(JSON.stringify({ error: r.msg || "promote failed", url: r.url }));
+          return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, url: r.url }));
+        }
+        if (path === "/repo-branches") {
+          // Per-repo staging/production branch names. Empty string clears the override (→ default).
+          if (actor?.role !== "admin") return res.writeHead(403).end(JSON.stringify({ error: "admin only" }));
+          if (!repo) return res.writeHead(400).end(JSON.stringify({ error: "repo required" }));
+          if (typeof p.staging === "string") setSetting(`repo_staging.${repo}`, p.staging.trim());
+          if (typeof p.production === "string") setSetting(`repo_production.${repo}`, p.production.trim());
           return ok();
         }
         if (path === "/app-stop") {

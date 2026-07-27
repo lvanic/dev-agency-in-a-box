@@ -7,13 +7,30 @@ import { Icon } from "../atoms/Icon.js";
 import { api, getJSON } from "../../lib/api.js";
 import { toast } from "../../lib/toast.js";
 
-export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoFilter, setRepoFilter, onPick, filterable }) {
+export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoBranches, repoFilter, setRepoFilter, onPick, filterable }) {
   const [avail, setAvail] = useState(null);
   const [manual, setManual] = useState("");
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
   const [isPrivate, setIsPrivate] = useState(true);
+  const [branchEdits, setBranchEdits] = useState({}); // repo+"/"+kind → in-progress value
+  const branches = repoBranches || {};
+  const branchVal = (r, k) => { const e = branchEdits[r + "/" + k]; return e !== undefined ? e : ((branches[r] || {})[k] || ""); };
+  const editBranch = (r, k, v) => setBranchEdits((s) => ({ ...s, [r + "/" + k]: v }));
+  function saveBranch(r, kind) {
+    const value = branchVal(r, kind).trim();
+    api("/repo-branches", { repo: r, [kind]: value })
+      .then(() => { toast(kind + " branch saved"); reload(); })
+      .catch((e) => toast((e && e.message) || "Couldn’t save", "error"));
+  }
+  const branchInput = (r, kind, label) => html`<label class="repodrop-branch" style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-2)">
+    <span style="width:52px;text-align:right">${label}</span>
+    <input style="flex:1;min-width:0;font-size:11px;padding:3px 6px" placeholder="(default branch)" value=${branchVal(r, kind)}
+      onInput=${(e) => editBranch(r, kind, e.target.value)}
+      onBlur=${() => saveBranch(r, kind)}
+      onKeyDown=${(e) => { if (e.key === "Enter") { e.target.blur(); } }}/>
+  </label>`;
   useEffect(() => { getJSON("/repos-available").then((d) => setAvail(d.repos || [])).catch(() => setAvail([])); }, []);
   function add(full) {
     if (!full || busy) return;
@@ -49,7 +66,11 @@ export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoFi
         ${showAuto ? html`<div class="autorow" style="margin:0">${rpill(r, "resume")}${rpill(r, "merge")}</div>` : null}
         <button class="repodrop-x" disabled=${busy} aria-label=${"Remove " + r} data-tip="Stop watching" onClick=${() => remove(r)}><${Icon} name="trash" size=${14}/></button>
       </div>
-    </div>`)}
+    </div>
+    ${showAuto ? html`<div class="repodrop-branchrow" style="display:flex;flex-direction:column;gap:4px;padding:2px 4px 8px 26px" key=${r + ":br"}>
+      ${branchInput(r, "staging", "staging")}
+      ${branchInput(r, "production", "prod")}
+    </div>` : null}`)}
     <div class="dropmenu-h">Add a repo</div>
     <div class="repodrop-add">
       <input placeholder="owner/name" value=${manual} onInput=${(e) => setManual(e.target.value)} onKeyDown=${(e) => { if (e.key === "Enter") add(manual.trim()); }}/>

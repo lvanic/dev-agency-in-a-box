@@ -177,8 +177,10 @@ function spawnUntil<T>(
   });
 }
 
-/** Start (or return) a web preview for a PR. Caps at one preview at a time to bound resources. */
-export async function startApp(repo: string, number: number, devScript: string): Promise<void> {
+/** Start (or return) a web preview for a PR. Caps at one preview at a time to bound resources.
+ *  `branch` overrides which ref to preview (default = the issue branch); callers pass the resolved
+ *  staging/production branch when the user picks a different run target. */
+export async function startApp(repo: string, number: number, devScript: string, branch = `agency/issue-${number}`): Promise<void> {
   const k = key(repo, number);
   const existing = apps.get(k);
   if (existing && existing.status !== "stopped" && existing.status !== "error") return;
@@ -188,7 +190,6 @@ export async function startApp(repo: string, number: number, devScript: string):
   const state: Live = { repo, number, status: "installing", startedAt: Date.now(), lastSeen: Date.now(), procs: [] };
   apps.set(k, state);
   const log = (t: string) => logLine(repo, number, t);
-  const branch = `agency/issue-${number}`;
   setActive(repo, number, "issue", "developer", `preview #${number}`);
   try {
     const dir = workdir(repo, number);

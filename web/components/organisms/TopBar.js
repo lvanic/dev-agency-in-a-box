@@ -59,9 +59,18 @@ export function TopBar({ working, scanning, env, theme, setTheme, onSettings, on
   useEffect(() => { if (!refreshing) return; const t = setTimeout(() => setRefreshing(false), 8000); return () => clearTimeout(t); }, [refreshing]);
   const reloadBusy = refreshing;
   function reloadGithub() { if (refreshing) return; setRefreshing(true); api("/refresh", {}).then(() => toast("Reloading from GitHub…")).catch(() => toast("Couldn’t reach the server", "error")); setTimeout(reload, 1500); setTimeout(reload, 4000); }
+  function promote() {
+    const repo = repoFilter;
+    if (!repo) { toast("Pick a repo first (top-center selector), then promote."); return; }
+    if (!window.confirm(`Merge ${repo}'s staging branch into production? This can deploy to your live environment.`)) return;
+    api("/promote", { repo })
+      .then((r) => toast(r && r.url ? "Promoted → " + r.url : "Promoted staging → production"))
+      .catch((e) => toast((e && e.message) || "Promote failed", "error"));
+  }
   const themeItem = { icon: theme === "dark" ? "sun" : "moon", label: theme === "dark" ? "Light mode" : "Dark mode", fn: () => setTheme(theme === "dark" ? "light" : "dark") };
   const acts = [
     { icon: reloadBusy ? null : "refresh", label: reloadBusy ? "Reloading…" : "Reload from GitHub", fn: reloadGithub, busy: reloadBusy },
+    ...(repos && repos.length ? [{ icon: "merge", label: "Promote staging → production", fn: promote }] : []),
     { icon: "users", label: "Agents", fn: onAgents },
     { icon: "chart", label: "Token usage", fn: onUsage },
     themeItem,
