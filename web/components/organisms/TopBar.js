@@ -146,7 +146,8 @@ export function StatusLine({ working, session, spend, analyzer, reload, sort, se
   const pct = s.budget > 0 ? Math.min(100, Math.round((100 * s.tokens) / s.budget)) : 0;
   const col = pct >= 90 ? "var(--red)" : pct >= 70 ? "var(--amber)" : "var(--green)";
   const [ver, setVer] = useState(null);
-  const [pop, setPop] = useState(null); // "usage" | "window" | null
+  const [prs, setPrs] = useState(null); // last merged agency PRs (lazy-loaded on build-stamp open)
+  const [pop, setPop] = useState(null); // "usage" | "window" | "build" | null
   const [bud, setBud] = useState(s.budget || 0);
   const [pctNow, setPctNow] = useState(pct);
   const [win, setWin] = useState(s.windowHours || 5);
@@ -157,12 +158,18 @@ export function StatusLine({ working, session, spend, analyzer, reload, sort, se
   useEffect(() => { getJSON("/web/version.json").then(setVer).catch(() => setVer(null)); }, []);
   // Label shows a relative "built X ago"; the hover popup shows the absolute date+time in the
   // BROWSER's local zone (builtAt is ISO-UTC — new Date(...).toLocaleString() converts it).
+  // Primary stamp: the PR-tied tag "V1 · 260727 · #217" + relative build age. Falls back to the old
+  // vN.N label if this build predates the tag field.
   const verLabel = ver
-    ? "v" + (ver.version || "?") + (ver.sha ? " · " + ver.sha : "") + (ver.builtAt ? " · " + ago(ver.builtAt) + " ago" : "")
+    ? (ver.tag || "v" + (ver.version || "?")) + (ver.builtAt ? " · " + ago(ver.builtAt) + " ago" : "")
     : "dev";
   const verTitle = ver
-    ? "v" + (ver.version || "?") + (ver.build ? " · build " + ver.build : "") + (ver.sha ? " · " + ver.sha : "") + (ver.builtAt ? " · built " + new Date(ver.builtAt).toLocaleString() : "")
+    ? "v" + (ver.version || "?") + (ver.build ? " · build " + ver.build : "") + (ver.sha ? " · " + ver.sha : "") + (ver.builtAt ? " · built " + new Date(ver.builtAt).toLocaleString() : "") + "\nClick for the last merged PRs"
     : "Development build (not from a Docker image)";
+  function openBuild() {
+    setPop(pop === "build" ? null : "build");
+    if (pop !== "build" && !prs) getJSON("/agency-prs").then((d) => setPrs((d && d.prs) || [])).catch(() => setPrs([]));
+  }
 
   function openUsage() { setBud(s.budget || 0); setPctNow(pct); setPop(pop === "usage" ? null : "usage"); }
   function openWindow() { setWin(s.windowHours || 5); setStart(toLocalInput(s.windowStart ? new Date(s.windowStart) : new Date())); setPop(pop === "window" ? null : "window"); }
@@ -232,6 +239,21 @@ export function StatusLine({ working, session, spend, analyzer, reload, sort, se
         <button class="btn" style="width:100%;justify-content:center;margin-top:8px" onClick=${() => setSort((s) => ({ ...s, dir: (s && s.dir) === "asc" ? "desc" : "asc" }))}>${(sort && sort.dir) === "asc" ? "Ascending ↑" : "Descending ↓"} — flip</button>
       </div>` : null}
     </span>` : null}
-    <span class="buildstamp" title=${verTitle}>${verLabel}</span>
+    <span class="statpop">
+      <span class="buildstamp statlink" title=${verTitle} onClick=${openBuild}>${verLabel}</span>
+      ${pop === "build" ? html`<div class="dropscrim" onClick=${() => setPop(null)}></div><div class="dropmenu statmenu" style="right:0;left:auto;min-width:280px;max-width:360px">
+        <div class="dropmenu-h">This build</div>
+        <div class="muted" style="font-size:11.5px;margin-bottom:8px">${ver ? html`${ver.tag || ("v" + ver.version)}${ver.sha ? " · " + ver.sha : ""}${ver.builtAt ? " · built " + new Date(ver.builtAt).toLocaleString() : ""}` : "Development build"}</div>
+        <div class="dropmenu-h">Last merged PRs${ver && ver.pr ? " — running #" + ver.pr : ""}</div>
+        ${prs === null
+          ? html`<div class="muted" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 0"><${Spinner} size=${12}/> Loading…</div>`
+          : prs.length === 0
+          ? html`<div class="muted" style="font-size:12px;padding:4px 0">No merged PRs found.</div>`
+          : prs.map((p) => { const cur = ver && ver.pr === p.number; return html`<a key=${p.number} href=${p.url} target="_blank" rel="noopener" class="menu-item" style=${"text-decoration:none;justify-content:space-between;gap:10px;" + (cur ? "font-weight:600" : "")}>
+              <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cur ? "▶ " : ""}#${p.number} ${p.title}</span>
+              <span class="muted" style="font-size:11px;white-space:nowrap">${p.mergedAt ? ago(p.mergedAt) + " ago" : ""}</span>
+            </a>`; })}
+      </div>` : null}
+    </span>
   </div>`;
 }

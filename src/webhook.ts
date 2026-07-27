@@ -65,7 +65,7 @@ import { getConversation, conversationCount, foldInGitHubComment, recordOutgoing
 import { listRunThread, renderBadge } from "./store.js";
 import { recentFailuresSince } from "./store.js";
 import { effectiveRepos } from "./commands.js";
-import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists, createRepo, repoStagingBranch, repoProductionBranch, promoteStagingToProduction } from "./github.js";
+import { getThreadFull, commentAsHuman, editCommentAsHuman, commentOnIssue, mergePrForBranch, closeIssue, deleteIssueHard, findPrForBranch, prMergeStatus, mergeProbe, branchHeadSha, createIssue, readRepoFile, listUserRepos, deleteAgencyComments, repoExists, createRepo, repoStagingBranch, repoProductionBranch, promoteStagingToProduction, listMergedPrs } from "./github.js";
 import { listAgentFiles, readAgentFile, isSafeAgentPath } from "./memory.js";
 import { listVault, getVaultEntry, upsertVaultEntry, deleteVaultEntry, decodeVaultEntry, listVaultRevisions } from "./store.js";
 import { renderVault, compressToEntries, canonicalLineOf } from "./vaultTranslate.js";
@@ -766,6 +766,15 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         const unsub = subscribeToolchains((e) => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* client gone */ } });
         const keepalive = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 25000);
         req.on("close", () => { clearInterval(keepalive); unsub(); });
+        return;
+      }
+
+      // Last few merged PRs on the agency's own repo — powers the build-stamp tooltip so you can
+      // confirm the running build corresponds to a specific merge.
+      if (url === "/agency-prs") {
+        void listMergedPrs(cfg.agencyRepo, 5)
+          .then((prs) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ repo: cfg.agencyRepo, prs })))
+          .catch(() => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ repo: cfg.agencyRepo, prs: [] })));
         return;
       }
 

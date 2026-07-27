@@ -21,6 +21,13 @@ const sha = run("git rev-parse --short HEAD") || (process.env.SOURCE_COMMIT || "
 const commitCount = Number(run("git rev-list --count HEAD")) || 0;
 const builtAt = new Date().toISOString();
 
+// The PR this build was cut from: Coolify builds the squash-merge commit on main, whose subject ends
+// with "(#123)". Baking it lets the dashboard show "which PR am I running" and cross-check against the
+// last-merged-PRs list — the fastest way to confirm a redeploy actually shipped your change.
+const subject = run("git log -1 --pretty=%s HEAD");
+const prMatch = /#(\d+)\)?\s*$/.exec(subject) || /#(\d+)/.exec(subject);
+const pr = prMatch ? Number(prMatch[1]) : null;
+
 // Version: YY.M (two-digit year, unpadded month) + patch = commit count. e.g. 2026-07 + 568 → "26.7.568"
 const d = new Date(builtAt);
 const majorMinor = `${d.getFullYear() % 100}.${d.getMonth() + 1}`;
@@ -32,6 +39,10 @@ const pad = (n) => String(n).padStart(2, "0");
 const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const label = `v${version}${sha ? ` · ${sha}` : ""} · ${stamp}`;
 
-const out = { version, build: commitCount, builtAt, sha, stamp, label };
+// Human-friendly build tag tied to the merged PR: "V1 · 260727 · #217" (YYMMDD from the build date).
+const ymd = `${pad(d.getFullYear() % 100)}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+const tag = `V1 · ${ymd}${pr ? ` · #${pr}` : ""}`;
+
+const out = { version, build: commitCount, builtAt, sha, stamp, label, pr, ymd, tag };
 writeFileSync(new URL("../web/version.json", import.meta.url), JSON.stringify(out) + "\n");
 console.log(`[version] ${label}`);

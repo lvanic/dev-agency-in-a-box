@@ -13,6 +13,12 @@ export interface VersionInfo {
   sha: string;
   stamp: string;
   label: string;
+  /** PR this build was cut from (from the squash-merge commit subject), or null if unknown. */
+  pr: number | null;
+  /** Build date as YYMMDD. */
+  ymd: string;
+  /** Human build tag: "V1 · 260727 · #217". */
+  tag: string;
 }
 
 function fmtStamp(iso: string): string {
@@ -39,5 +45,10 @@ export function versionInfo(): VersionInfo {
   const build = v.build || 0;
   const builtAt = v.builtAt || new Date().toISOString();
   const stamp = v.stamp || fmtStamp(builtAt);
-  return { version, build, builtAt, sha, stamp, label: buildLabel(version, build, sha, stamp) };
+  const pr = typeof v.pr === "number" ? v.pr : null;
+  const d = new Date(builtAt);
+  const p2 = (n: number): string => String(n).padStart(2, "0");
+  const ymd = v.ymd || `${p2(d.getFullYear() % 100)}${p2(d.getMonth() + 1)}${p2(d.getDate())}`;
+  const tag = v.tag || `V1 · ${ymd}${pr ? ` · #${pr}` : ""}`;
+  return { version, build, builtAt, sha, stamp, label: buildLabel(version, build, sha, stamp), pr, ymd, tag };
 }

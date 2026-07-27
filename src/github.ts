@@ -301,6 +301,20 @@ export async function listRecentThreads(repo: string, limit = 60): Promise<Recen
   }));
 }
 
+export interface MergedPr { number: number; title: string; mergedAt: string; sha: string; url: string }
+
+/** The most recently MERGED PRs on a repo (newest first) — powers the build-stamp tooltip so you can
+ *  confirm the running build matches a specific merge. One cheap gh read. */
+export async function listMergedPrs(repo: string, limit = 5): Promise<MergedPr[]> {
+  const out = await gh(["pr", "list", "--repo", repo, "--state", "merged", "--json", "number,title,mergedAt,mergeCommit,url", "--limit", String(Math.max(1, limit))]).catch(() => "[]");
+  try {
+    const arr = JSON.parse(out) as Array<{ number: number; title: string; mergedAt?: string; mergeCommit?: { oid?: string }; url?: string }>;
+    return arr.map((p) => ({ number: p.number, title: p.title || "", mergedAt: p.mergedAt || "", sha: (p.mergeCommit?.oid || "").slice(0, 7), url: p.url || "" }));
+  } catch {
+    return [];
+  }
+}
+
 /** True only if the issue's agency PR was actually MERGED (not just closed). One cheap gh read. */
 export async function prMerged(repo: string, branch: string): Promise<boolean> {
   const out = await gh(["pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "mergedAt", "--limit", "1"]).catch(() => "[]");
