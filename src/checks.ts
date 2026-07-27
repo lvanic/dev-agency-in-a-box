@@ -232,6 +232,28 @@ export function parseDiscoveredChecks(text: string): CommandSet | null {
   }
 }
 
+/** Are project deps already on disk? Lets us skip a redundant reinstall when setup already ran it. */
+function depsAlreadyInstalled(workdir: string, set: CommandSet): boolean {
+  if (set.requires === "node") return existsSync(join(workdir, "node_modules", ".bin"));
+  return false; // other stacks: let runChecks own the install
+}
+
+/**
+ * Install project dependencies ONCE at sandbox setup, so EVERY downstream role can run the suite —
+ * not just the tester. The reviewer has no install mandate (by design it only reads the diff), so on
+ * a fresh clone it would find jest/eslint missing and degrade to "read the config" instead of running
+ * anything. Installing here closes that gap. Node only for now (the reported case); non-fatal — a
+ * failed install just leaves the tester's own install step to surface it as env-blocked.
+ */
+export async function ensureDepsInstalled(workdir: string, repo: string, onLog?: (s: string) => void): Promise<void> {
+  const set = detectCommands(workdir, repo);
+  if (!set || !set.install || set.requires !== "node") return;
+  if (depsAlreadyInstalled(workdir, set)) return;
+  if (set.requires && !(await hasTool(set.requires, set.binDir))) return; // no runtime → tester pauses/handles
+  onLog?.(`📦 installing dependencies (${set.install.split("||")[0].trim()})`);
+  try { await run(set.install, workdir, 240_000, set.binDir); } catch { /* non-fatal: tester re-reports */ }
+}
+
 /**
  * Run the project's checks deterministically. Returns `ran:false` when the stack is unknown so the
  * caller can fall back to the LLM tester.
@@ -248,7 +270,7 @@ export async function runChecks(workdir: string, repo: string): Promise<ChecksOu
     return { ran: false, pass: false, verified: false, neededToolchain: set.toolchain, summary: "", results: [] };
   }
 
-  if (set.install) {
+  if (set.install && !depsAlreadyInstalled(workdir, set)) {
     const inst = await run(set.install, workdir, 240_000, extraPath);
     if (inst.code !== 0) {
       // Dependencies didn't install → the sandbox can't run these checks. Don't fall into a fix loop

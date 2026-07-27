@@ -1084,8 +1084,16 @@ export async function ensureBranchPushed(workdir: string, branch: string): Promi
     // Count commits ahead of the repo's REAL default branch (origin/HEAD), not a hardcoded
     // origin/main — repos whose default isn't "main" have no origin/main, which made this return 0
     // and wrongly report "no commits" → needs-attention even when the work was pushed.
-    const baseRef = (await runGit(workdir, ["rev-parse", "--abbrev-ref", "origin/HEAD"]).catch(() => "origin/main")).trim() || "origin/main";
-    const ahead = await runGit(workdir, ["rev-list", "--count", `${baseRef}..${branch}`]).catch(() => "0");
+    const baseRef = (await runGit(workdir, ["rev-parse", "--abbrev-ref", "origin/HEAD"]).catch(() => "")).trim();
+    let ahead: string;
+    if (!baseRef || baseRef === `origin/${branch}` || baseRef.replace(/^origin\//, "") === branch) {
+      // No DISTINCT base: an empty repo whose default GitHub branch IS this agency branch (origin/HEAD
+      // resolves to the branch itself). `base..branch` would be empty → "no commits" even though the
+      // branch holds all the work. Count every commit on the branch instead so finalize opens a PR.
+      ahead = await runGit(workdir, ["rev-list", "--count", branch]).catch(() => "0");
+    } else {
+      ahead = await runGit(workdir, ["rev-list", "--count", `${baseRef}..${branch}`]).catch(() => "0");
+    }
     return Number(ahead) > 0;
   } catch {
     return false;
@@ -1115,10 +1123,55 @@ export async function repoBaseBranch(repo: string): Promise<string> {
   let base = "main";
   try {
     const out = await gh(["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]);
-    if (out.trim()) base = out.trim();
+    const detected = out.trim();
+    // NEVER use an agency work branch as a PR base. A repo pushed while empty adopts the FIRST pushed
+    // branch as its GitHub default — which for us is `agency/issue-N`. Using it as base means
+    // base == head, and `gh pr create` is rejected → the PR silently never opens and the (approved)
+    // issue parks as needs-attention. Fall back to "main"; ensureBaseExists() creates it if missing.
+    if (detected && !/^agency\//.test(detected)) base = detected;
   } catch { /* offline / no gh — fall back to main */ }
   repoBaseCache.set(repo, base);
   return base;
+}
+
+/** Does branch `name` exist on the remote? One cheap API read. */
+export async function remoteBranchExists(repo: string, name: string): Promise<boolean> {
+  const out = await gh(["api", `repos/${repo}/branches/${encodeURIComponent(name)}`, "-q", ".name"]).catch(() => "");
+  return out.trim() === name;
+}
+
+/** SHA of a branch's ROOT (oldest) commit, via the API — the commits list is newest-first, so the
+ * last page's last entry is the root. Returns "" if it can't be determined. */
+async function rootCommitSha(repo: string, branch: string): Promise<string> {
+  const out = await gh([
+    "api", "--paginate", "-X", "GET", `repos/${repo}/commits`,
+    "-f", `sha=${branch}`, "-f", "per_page=100", "-q", ".[].sha",
+  ]).catch(() => "");
+  const shas = out.trim().split("\n").filter(Boolean);
+  return shas.length ? shas[shas.length - 1] : "";
+}
+
+/**
+ * Make sure `base` exists on the remote so a PR can target it. For a normal repo it already does and
+ * this is a single cheap read. For a repo that was pushed while empty (its only branch is the agency
+ * head branch, which GitHub made the default), we create `base` from the head branch's ROOT commit
+ * and point the repo default at it — all via the API, so this works from finalize AND the dashboard
+ * "Create PR" (neither needs a workdir). Returns true if `base` now exists and differs from `head`.
+ * (Prevention for NEW repos is createRepo's `--add-readme`; this recovers repos created without it.)
+ */
+async function ensureBaseExists(repo: string, base: string, head: string): Promise<boolean> {
+  if (base === head) return false; // nothing to target — caller must not open a PR against itself
+  if (await remoteBranchExists(repo, base)) return true;
+  const root = await rootCommitSha(repo, head);
+  if (!root) return false;
+  const made = await gh([
+    "api", "-X", "POST", `repos/${repo}/git/refs`, "-f", `ref=refs/heads/${base}`, "-f", `sha=${root}`,
+  ]).then(() => true).catch(() => false);
+  if (!made && !(await remoteBranchExists(repo, base))) return false; // create failed and still absent
+  await gh(["api", "-X", "PATCH", `repos/${repo}`, "-f", `default_branch=${base}`]).catch(() => {});
+  repoBaseCache.set(repo, base);
+  console.log(`[agency] ${repo}: created missing base branch '${base}' (repo had no default besides '${head}')`);
+  return true;
 }
 
 /** Open a draft PR for the branch if none exists; returns the PR (or null). */
@@ -1126,10 +1179,18 @@ export async function ensureDraftPr(repo: string, issue: number, branch: string,
   const existing = await findPrForBranch(repo, branch);
   if (existing) return existing;
   const base = await repoBaseBranch(repo);
+  if (!(await ensureBaseExists(repo, base, branch))) {
+    console.warn(`[agency] ${repo} #${issue}: cannot open PR — base '${base}' is missing/equal to head '${branch}'`);
+    return null;
+  }
   await gh([
     "pr", "create", "--repo", repo, "--draft", "--base", base, "--head", branch,
     "--title", title || `Work for #${issue}`, "--body", `Closes #${issue}`,
-  ]).catch(() => {});
+  ]).catch((e) => {
+    // Don't swallow silently — a swallowed failure here is exactly what made approved issues park as
+    // "no commits". Log it so finalize's "PR couldn't open" branch is diagnosable.
+    console.warn(`[agency] ${repo} #${issue}: gh pr create failed — ${String((e as Error)?.message || e).slice(0, 200)}`);
+  });
   return findPrForBranch(repo, branch);
 }
 

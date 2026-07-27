@@ -26,6 +26,7 @@ import {
   isNoOpComment,
   findPrForBranch,
   ensureDraftPr,
+  remoteBranchExists,
   createIssue,
   commentOnPr,
   prHealth,
@@ -45,6 +46,7 @@ import { githubReady, ghUserToken, ghBotToken } from "./creds.js";
 import { decideThreadAction } from "./route.js";
 import { reconcileEpics, onChildMerged, renderEpicTracker } from "./epics.js";
 import { indexRepo } from "./gitnexus.js";
+import { ensureDepsInstalled } from "./checks.js";
 import { pushActivity } from "./activity.js";
 import { roleForHandle, ALL_ROLES, type RoleName } from "./agents/roles.js";
 import { resolveWorkflow, workflowLeadRole } from "./workflow.js";
@@ -408,6 +410,10 @@ async function processIssue(cfg: Config, repo: string, issue: Issue, opts: { fre
     // the worked-on code away.
     if (resuming || takeover) await fetchCheckout(workdir, `agency/issue-${issue.number}`).catch(() => {});
     await indexRepo(workdir, repo, (s) => pushActivity(repo, issue.number, role, "tool", s));
+    // Install project deps ONCE now (node, when missing) so BOTH the tester and the reviewer can run
+    // the suite — the reviewer has no install mandate, so without this a fresh clone leaves jest/eslint
+    // unrunnable and the review degrades to reading config. Non-fatal.
+    await ensureDepsInstalled(workdir, repo, (s) => pushActivity(repo, issue.number, role, "tool", s));
     await runFlow();
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
@@ -1244,6 +1250,34 @@ async function reconcileRateLimited(cfg: Config): Promise<void> {
 }
 
 /**
+ * Orchestrator self-heal: recover issues parked `needsAttention` whose work IS pushed but whose PR
+ * never opened — the classic case being a repo that had no `main` base when finalize ran (see
+ * ensureDraftPr / ensureBaseExists). For each such issue we retry PR creation deterministically (no
+ * agent, zero tokens). This is what lets an approved-but-parked issue reach "review" on its own
+ * instead of waiting for a human comment. Runs at startup/redeploy alongside the other reconciles.
+ */
+async function reconcileStuckNoPr(cfg: Config): Promise<void> {
+  let healed = 0;
+  for (const repo of effectiveRepos(cfg)) {
+    let issues: Issue[];
+    try { issues = await listAllOpenIssues(repo); } catch { continue; }
+    for (const issue of issues) {
+      try {
+        if (getIssueStatus(repo, issue.number).blocked !== "needsAttention") continue;
+        const branch = `agency/issue-${issue.number}`;
+        if (await findPrForBranch(repo, branch)) continue; // already has a PR — different problem
+        if (!(await remoteBranchExists(repo, branch))) continue; // no pushed work → genuine needs-attention
+        const res = await forceCreatePr(cfg, repo, issue.number);
+        if (res.ok) { healed++; console.log(`[agency] self-heal: opened PR for parked ${repo} #${issue.number} -> ${res.url}`); }
+      } catch (err) {
+        console.error(`[agency] self-heal error on ${repo} #${issue.number}:`, (err as Error).message);
+      }
+    }
+  }
+  if (healed) console.log(`[agency] self-heal: recovered ${healed} parked issue(s) into review.`);
+}
+
+/**
  * Pure-script auto-resume: every minute, re-run any issue whose per-provider rate-limit reset has
  * passed. Rate limits are per-provider, so a GLM reset re-runs the issue on the best available model
  * (GLM is eligible again). No global pause anymore.
@@ -1413,6 +1447,8 @@ async function backgroundInit(cfg: Config): Promise<void> {
     const resumed = await autoResumeInterrupted(cfg);
     await recoverOrphans(cfg, resumed);
     await reconcileRateLimited(cfg);
+    await reconcileStuckNoPr(cfg); // orchestrator takeover: open PRs for approved-but-parked issues
+
   } catch (e) {
     console.error("[agency] background init error:", (e as Error).message);
   }

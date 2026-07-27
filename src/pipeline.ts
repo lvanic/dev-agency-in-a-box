@@ -414,6 +414,18 @@ async function finalizeWithPr(repo: string, issue: Issue, workdir: string, branc
     ].join("\n"));
     console.log(`[agency] ${repo} #${issue.number} -> review. PR: ${pr.url}`);
     return true;
+  } else if (hasCommits) {
+    // The work IS pushed but the PR couldn't be opened (e.g. GitHub rejected the create). Tell the
+    // truth — the old "nothing to commit" message here was wrong and misled debugging. The orchestrator
+    // self-heal (reconcileStuckNoPr) retries this automatically on the next scan.
+    recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "needsAttention"));
+    await commentOnIssue(
+      repo,
+      issue.number,
+      `⚠️ Work is pushed to \`${branch}\`, but the draft PR couldn't be opened automatically. The agency will retry; you can also press **Create PR** on the card.`,
+    );
+    console.log(`[agency] ${repo} #${issue.number} -> needs-attention (PR create failed; work is on ${branch}).`);
+    return false;
   } else {
     recordIssueStatus(repo, issue.number, setBlocked(withStatus("working"), "needsAttention"));
     await commentOnIssue(
