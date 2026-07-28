@@ -46,3 +46,28 @@ test("playVoice ignores unknown roles and debounces repeats", () => {
   sound.playVoice("planner"); // within debounce window
   assert.equal(plays, 1, "rapid re-hover debounced");
 });
+
+test("per-sound toggles gate playCue and playVoice", () => {
+  sound.setSoundOn(true);
+  plays = 0;
+  // default on for every configured cue
+  for (const c of sound.SOUND_CUES) assert.equal(sound.isSoundKindOn(c.key), true);
+  sound.setSoundKindOn("done", false);
+  assert.equal(sound.isSoundKindOn("done"), false);
+  sound.playCue("done");
+  assert.equal(plays, 0, "disabled cue → no sound");
+  sound.playCue("attention");
+  assert.equal(plays, 1, "other cue still plays");
+  // voices toggle gates avatar voices
+  sound.setSoundKindOn("voices", false);
+  sound.playVoice("tester");
+  assert.equal(plays, 1, "voices off → hover silent");
+  sound.setSoundKindOn("voices", true);
+});
+
+test("preview plays regardless of toggles", () => {
+  sound.setSoundOn(false);
+  plays = 0;
+  sound.preview("done");
+  assert.equal(plays, 1, "preview ignores master mute");
+});
