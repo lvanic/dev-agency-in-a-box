@@ -20,6 +20,16 @@ export function workflowLeadRole(wf: Workflow): RoleName {
   return HANDLE_ROLE[(wf.steps[0]?.agent || "").toLowerCase()] || "developer";
 }
 
+/**
+ * The role of the agent that actually SPEAKS/works first in a workflow — its real first step,
+ * NOT the control-flow lead. For full-build the lead is `developer` (it routes runPipeline into
+ * runDeveloperPipeline), but the planner runs first; the run-start chat/activity must announce the
+ * planner so it agrees with the timeline (#233). Use this for display only, never for routing.
+ */
+export function workflowFirstAgentRole(wf: Workflow): RoleName {
+  return HANDLE_ROLE[(wf.steps[0]?.agent || "").toLowerCase()] || workflowLeadRole(wf);
+}
+
 /** Resolve the workflow whose trigger the text mentions (first match), or null. */
 export function resolveWorkflow(text: string): Workflow | null {
   const t = text || "";

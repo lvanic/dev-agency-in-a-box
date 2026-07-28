@@ -49,7 +49,7 @@ import { indexRepo } from "./gitnexus.js";
 import { ensureDepsInstalled } from "./checks.js";
 import { pushActivity } from "./activity.js";
 import { roleForHandle, ALL_ROLES, type RoleName } from "./agents/roles.js";
-import { resolveWorkflow, workflowLeadRole } from "./workflow.js";
+import { resolveWorkflow, workflowLeadRole, workflowFirstAgentRole } from "./workflow.js";
 import { getWorkflow, getDefaultWorkflowId } from "./db/workflows.js";
 import { getIssueWorkflow, setIssueWorkflow } from "./db/providers.js";
 import { pickDealerDispatch } from "./agents/dealer.js";
@@ -350,13 +350,17 @@ async function processIssue(cfg: Config, repo: string, issue: Issue, opts: { fre
   // A single explicit pin (no workflow) runs JUST that one agent — @dev / a code agent = solo
   // developer + PR; @plan/@arch/@review/@test = a single specialist. The multi-step build is the
   // Full build workflow (@build). A bare issue with no recognised handle falls back to Full build.
+  // Role to ANNOUNCE at run start (chat + activity). For a workflow, that's the agent that actually
+  // works first (planner for full-build), not the control-flow lead role used for routing — so the
+  // opening comment agrees with the live timeline (#233).
+  const displayRole: RoleName = wf ? workflowFirstAgentRole(wf) : role;
   const single = !!takeover || (!resuming && !wf && !pinnedWf && handleRole !== null);
   // Persist whether this is a SOLO single-role pin (e.g. @dev → just the developer) vs a multi-step
   // workflow, so the dashboard shows the ONE real step instead of defaulting to the full build. Only
   // write on a fresh run (resume forces single=false but the issue is still solo) so it's not wiped.
   if (!resuming && !takeover) setSetting(`issue_solo.${repo}#${issue.number}`, single ? role : "");
   console.log(`[agency] ${repo} #${issue.number}: ${issue.title} -> role:${role}${resuming ? " (resume)" : ""}`);
-  pushActivity(repo, issue.number, role, "start", "▶ starting…"); // instant feedback before the GitHub prep + clone
+  pushActivity(repo, issue.number, displayRole, "start", "▶ starting…"); // instant feedback before the GitHub prep + clone
 
   // Budget gate: park runaway issues instead of silently burning more. Per-issue override +
   // unlimited flag live in the DB (ADR-0001/0003: no GitHub label has power here).
@@ -379,7 +383,7 @@ async function processIssue(cfg: Config, repo: string, issue: Issue, opts: { fre
 
   recordIssueStatus(repo, issue.number, withStatus("working"), { title: issue.title, role });
   if (!resuming) {
-    await commentOnIssue(repo, issue.number, `🏗️ On it (role: **${role}**) — branch \`agency/issue-${issue.number}\`.`);
+    await commentOnIssue(repo, issue.number, `🏗️ On it (role: **${displayRole}**) — branch \`agency/issue-${issue.number}\`.`);
   }
 
   const thread = opts.fresh ? "" : await commentThread(repo, issue.number); // fresh dashboard issue has no thread — skip the GitHub read

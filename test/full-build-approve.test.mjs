@@ -11,7 +11,7 @@ import { join } from "node:path";
 process.env.MASTER_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "dadb-fba-")), "test.db");
 
-const { workflowLeadRole } = await import("../dist/workflow.js");
+const { workflowLeadRole, workflowFirstAgentRole } = await import("../dist/workflow.js");
 const { getWorkflow, seedWorkflows, setSetting, getSetting } = await import("../dist/store.js");
 const { isApproval } = await import("../dist/pipeline.js");
 
@@ -20,6 +20,15 @@ test("full-build leads as developer (routes to runDeveloperPipeline)", () => {
   const wf = getWorkflow("full-build");
   assert.ok(wf, "full-build workflow exists");
   assert.equal(workflowLeadRole(wf), "developer");
+});
+
+test("full-build ANNOUNCES the planner — the agent that works first, not the lead (#233)", () => {
+  const wf = getWorkflow("full-build");
+  assert.ok(wf, "full-build workflow exists");
+  // Routing lead stays developer, but the run-start chat/activity must show the planner so it
+  // agrees with the live timeline.
+  assert.equal(workflowLeadRole(wf), "developer");
+  assert.equal(workflowFirstAgentRole(wf), "planner");
 });
 
 test("plan-only still leads as planner; review-only as reviewer", () => {
