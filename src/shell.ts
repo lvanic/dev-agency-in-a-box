@@ -799,7 +799,7 @@ html[data-theme="dark"] .gtip{background:#000;color:#fff}
 .statpop{position:relative;display:inline-flex;align-items:center}
 .statlink{cursor:pointer;display:inline-flex;align-items:center;gap:5px;border-radius:6px;padding:1px 3px}
 .statlink:hover{background:var(--surface-2);color:var(--ink)}
-.statmenu{left:0;top:calc(100% + 6px);min-width:230px;padding:10px 12px;z-index:100}
+.statmenu{left:0;top:calc(100% + 6px);min-width:230px;padding:10px 12px;z-index:120}
 .statmenu label{display:block;font-size:11.5px;color:var(--ink-3);margin:8px 0 3px}
 .statmenu input{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:13.5px inherit;background:var(--surface);color:var(--ink)}
 .statmenu .btn{margin-top:10px;width:100%;justify-content:center}
