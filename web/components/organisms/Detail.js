@@ -189,10 +189,19 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   const done = isDone(issue);
   const st = issue.state || "";
   const running = !!(issue.running || issue.active || issue.queued); // a Claude run is executing right now
-  // The newest comment may carry clickable answer choices (an agent asked a question). Surface them in
-  // the pinned ActionDock above the composer, but only while the run is paused waiting on the human.
-  const lastComment = thread && Array.isArray(thread.comments) && thread.comments.length ? thread.comments[thread.comments.length - 1] : null;
-  const pendingQuestion = (!running && lastComment && lastComment.meta && lastComment.meta.question) ? lastComment.meta.question : null;
+  // An agent may have asked a question with clickable answer choices (meta.question). Surface it in the
+  // pinned ActionDock above the composer while the run is paused. Scan back from the newest comment:
+  // the first agency comment carrying a question is the pending one — UNLESS a human already replied
+  // after it (a non-agency comment nearer the end), in which case nothing is pending.
+  const pendingQuestion = (() => {
+    if (running || !thread || !Array.isArray(thread.comments)) return null;
+    for (let i = thread.comments.length - 1; i >= 0; i--) {
+      const c = thread.comments[i];
+      if (c.isAgency === false) return null; // the human already answered
+      if (c.meta && c.meta.question) return c.meta.question;
+    }
+    return null;
+  })();
 
   // Send the composed reply (the shared ChatComposer already folded attachment markdown into
   // `full`). The chosen agent travels as a STRUCTURED field — never an "@handle " text prefix.

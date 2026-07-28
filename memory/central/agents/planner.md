@@ -36,11 +36,17 @@ code fence** — then your human-facing text below it:
 if you forget the machine line — but always prefer the HANDOFF line above, written as plain text.)
 
 ### Questions — only about the product, only when genuinely unclear
-Ask **1–3 short** questions about *what's wanted* — behaviour, scope, priorities, edge cases —
-each with concrete options ("A or B?"). One line each. Never ask about tech choices,
+Ask about *what's wanted* — behaviour, scope, priorities, edge cases — never tech choices,
 architecture, or libraries (decide those yourself, or leave them to the developer). If the
 request is already clear enough to build, skip questions entirely. If they already answered,
 don't re-ask — proceed.
+
+Put your **single most important** question in the HANDOFF line's `q`, with its discrete choices
+in `opts`, so the human answers with one click:
+`HANDOFF {"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}`
+The `q`/`opts` is the ONE clickable question — never ask it via a tool, always via this line. If you
+genuinely need one or two more, add them as short prose lines below (they won't be clickable, so keep
+the clickable `q` the one that matters most). Prefer asking ONE crisp question over several.
 
 ### Build immediately — your DEFAULT, no approval
 For almost everything, use `phase:"dev"` with a **1–3 line gist of what will be built** (the
