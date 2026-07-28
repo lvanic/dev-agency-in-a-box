@@ -4,7 +4,7 @@
  *   - keep a single tracking comment on the parent with a live checklist (n/m done),
  *   - update each child's status every scan,
  *   - when ALL children are done (their PRs merged / issues closed), run a final review on the
- *     parent against the integrated default branch and move it to "ready" so you can close it,
+ *     parent against the integrated default branch and move it to "done" (closed),
  *   - let `/merge` on the parent merge every child PR at once.
  */
 import { createHash } from "node:crypto";
@@ -65,7 +65,7 @@ export function renderEpicTracker(children: EpicChild[]): string {
     ...lines,
     "",
     done === children.length
-      ? "All sub-issues complete. Reviewing the integrated result; then this epic is ready to close/merge."
+      ? "All sub-issues complete — this epic is marked **done**."
       : "This epic completes when every sub-issue above is done.",
   ].join("\n");
 }
@@ -106,9 +106,14 @@ export async function reconcileEpics(repo: string, threads: Map<number, RecentTh
     }
 
     if (done < fresh.length) continue; // epic-ness is isEpic() (the epics table), not a lifecycle state
-    // All children done — run the integration review on the parent once.
+    // All sub-issues are merged/done → the epic itself is complete. Move it to "done" (and close
+    // it on GitHub) right here, so completion never depends on the best-effort integration review
+    // below succeeding — a failed/offline review must not strand a finished epic in limbo (#240).
     if (!meta.reviewed) {
       setEpicMeta(repo, parent, { reviewed: true });
+      await closeIssue(repo, parent, `🚀 Epic complete — all sub-issues are merged/done (${fresh.map((c) => `#${c.child}`).join(", ")}).`).catch(() => {});
+      recordIssueStatus(repo, parent, withStatus("done"));
+      console.log(`[agency] epic #${parent} complete -> done`);
       await runEpicReview(repo, parent, fresh).catch((err) =>
         console.error(`[agency] epic review failed ${repo} #${parent}:`, (err as Error).message),
       );
@@ -116,7 +121,8 @@ export async function reconcileEpics(repo: string, threads: Map<number, RecentTh
   }
 }
 
-/** Final integration review on the parent once all sub-issues merged. */
+/** Best-effort final integration review comment on the parent once all sub-issues merged.
+ *  The epic's done/closed transition is handled by reconcileEpics (this never gates completion). */
 async function runEpicReview(repo: string, parent: number, children: EpicChild[]): Promise<void> {
   const workdir = join(process.cwd(), ".work", repo.replace("/", "__"), `epic-${parent}`);
   setActive(repo, parent, "issue", "reviewer", `epic #${parent} integration review`);
@@ -139,10 +145,9 @@ async function runEpicReview(repo: string, parent: number, children: EpicChild[]
     await commentOnIssue(
       repo,
       parent,
-      `🔍 **Epic integration review** · _dev-agency_\n\n${review.text}\n\n— all sub-issues are done. This epic is **ready** to close.`,
+      `🔍 **Epic integration review** · _dev-agency_\n\n${review.text}`,
     );
-    recordIssueStatus(repo, parent, withStatus("review"));
-    console.log(`[agency] epic #${parent} reviewed -> ready`);
+    console.log(`[agency] epic #${parent} integration review posted`);
   } finally {
     clearActive(repo, parent);
   }
