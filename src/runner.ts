@@ -634,6 +634,16 @@ export async function forceResume(cfg: Config, repo: string, number: number, add
   }
   setThreadCursor(repo, number, 0); // let any prior comment count again
   clearActive(repo, number); // drop a zombie "working" entry if a run died
+  // A steering comment on an already-DELIVERED issue (merged/closed → state "done") must NOT resume
+  // the old branch: `agency/issue-<n>` is merged into main, so processResume checks it out, finds
+  // `main..HEAD` empty, and stops without addressing the comment — and never reopens, so the card
+  // stays stuck in Done. Route it to the follow-up path instead (reopen + build the requested change
+  // fresh off main). Mirrors what the scan's `followup` action does for a GitHub-side comment.
+  if (addressComment && getIssueStatus(repo, number).state === "done") {
+    console.log(`[agency] resume → follow-up (delivered issue) ${repo} #${number}`);
+    dispatch(`${repo}#${number}`, () => processFollowUp(cfg, repo, issue, true));
+    return;
+  }
   // If a plan already exists, skip the (Opus) planner and resume the build from the branch —
   // otherwise run the full pipeline (the planner resumes its own session if it was interrupted).
   if (lastPlan(repo, number)) {
