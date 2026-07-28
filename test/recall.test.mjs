@@ -119,6 +119,23 @@ test("searchMemory: repo scope is private — no cross-repo bleed", () => {
   assert.ok(all.some((h) => h.repo === "acme/reimedy"), "unscoped search is unrestricted");
 });
 
+test("searchMemory: repo scope is private — no cross-repo bleed", () => {
+  s.recordPlan("acme/diary", 1, "Expo journal app with SQLite bullet entry setup and date navigation.");
+  s.recordPlan("acme/reimedy", 86, "Swap-by-config provider seam: local bundled ICD-10 now, remote KB later via flag.");
+
+  // Scoped to diary: must NOT surface the reimedy plan even though it matches the query.
+  const scoped = s.searchMemory("provider seam ICD-10", { repo: "acme/diary" });
+  assert.ok(!scoped.some((h) => h.repo === "acme/reimedy"), "reimedy memory never leaks into diary recall");
+
+  // Scoped to reimedy: its own plan is reachable.
+  const own = s.searchMemory("provider seam ICD-10", { repo: "acme/reimedy" });
+  assert.ok(own.some((h) => h.repo === "acme/reimedy" && h.number === 86), "own repo memory is reachable");
+
+  // No repo → unscoped (central-vault style) still returns across repos.
+  const all = s.searchMemory("provider seam ICD-10");
+  assert.ok(all.some((h) => h.repo === "acme/reimedy"), "unscoped search is unrestricted");
+});
+
 test("searchMemory: respects limit and truncates long text", () => {
   for (let i = 10; i < 30; i++) s.recordLesson("acme/app", i, "caching strategy note number " + i);
   const hits = s.searchMemory("caching", { repo: "acme/app", limit: 5 });

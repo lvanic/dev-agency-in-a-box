@@ -1,0 +1,19 @@
+# Dev Agency — marketing site (static, nginx).
+# Coolify: New Resource → Docker Compose → point at this repo,
+# set the Compose file path to  web/marketing/docker-compose.yml,
+# then attach your domain (it maps to the service's port 80).
+services:
+  marketing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Coolify routes the domain to this container port via its proxy.
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
