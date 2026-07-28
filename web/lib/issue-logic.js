@@ -23,6 +23,15 @@ export function classify(i) {
   return "planned";
 }
 
+// Sound cue an issue's current status warrants, or null. Consumers fire the effect only when this
+// value CHANGES between polls (not every render): "attention" when the issue starts needing the
+// human (approve / answer / attention / conflict), "done" when it finishes.
+export function soundEvent(i) {
+  if (isDone(i)) return "done";
+  if (i.blocked === "awaitingApproval" || i.blocked === "awaitingAnswer" || i.blocked === "needsAttention" || i.blocked === "conflict") return "attention";
+  return null;
+}
+
 export function statusChip(i) {
   const s = i.state || "";
   if (s === "done") return { cls: "s-done", label: "done", icon: "merge" };

@@ -17,6 +17,8 @@ import { Orchestrator } from "./components/organisms/Orchestrator.js";
 import { api, getJSON } from "./lib/api.js";
 import { md } from "./lib/markdown.js";
 import { toast, setToastFn } from "./lib/toast.js";
+import { playCue } from "./lib/sound.js";
+import { soundEvent } from "./lib/issue-logic.js";
 import { useIsDesktop, useViewportWidth } from "./lib/hooks.js";
 
 
@@ -113,6 +115,17 @@ function App() {
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, []);
+  // Optional sound cues: compare each issue's soundEvent() against the previous poll and chime only
+  // on a transition (never on first load, never every render). Off unless enabled in Settings.
+  const soundPrevRef = useRef(null);
+  useEffect(() => {
+    const cur = {};
+    (data.issues || []).forEach((i) => { cur[i.repo + "#" + i.number] = soundEvent(i); });
+    const prev = soundPrevRef.current;
+    if (prev) { for (const k in cur) { if (cur[k] && cur[k] !== prev[k]) playCue(cur[k]); } }
+    soundPrevRef.current = cur;
+  }, [data.issues]);
+
   // Coalesce SSE-triggered /data refreshes the same way scheduleTick coalesces re-renders — a burst
   // of start/done events (several issues finishing close together) should still be one /data fetch.
   const loadPendingRef = useRef(false);

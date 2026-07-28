@@ -5,6 +5,7 @@ import { api } from "../../../lib/api.js";
 import { toast } from "../../../lib/toast.js";
 import { agentOptions } from "../../../lib/agent-options.js";
 import { useAutoSave, saved, failed } from "./shared.js";
+import { isSoundOn, setSoundOn, play } from "../../../lib/sound.js";
 
 export function GeneralSection({ data, reload, admin }) {
   const cfg = data.config || {};
@@ -12,6 +13,7 @@ export function GeneralSection({ data, reload, admin }) {
   const later = useAutoSave();
   const [maxTok, setMaxTok] = useState(cfg.maxTokensPerRun || 600000);
   const [avatarsOn, setAvatarsOn] = useState(cfg.avatars !== "off");
+  const [soundOn, setSoundOnState] = useState(isSoundOn());
   const [selfImprove, setSelfImprove] = useState(ops.self_improve != null ? !!ops.self_improve : true);
   const [selfMergeHold, setSelfMergeHold] = useState(ops.self_merge_hold != null ? !!ops.self_merge_hold : true);
   const [newDefault, setNewDefault] = useState(cfg.newIssueDefault || "@dev");
@@ -25,6 +27,8 @@ export function GeneralSection({ data, reload, admin }) {
   return html`<div>
     <div class="sec">Appearance</div>
     <label class="ckline"><input type="checkbox" checked=${avatarsOn} onChange=${(e) => { setAvatarsOn(e.target.checked); put({ avatars: e.target.checked ? "on" : "off" }); }}/> Show agent avatars (cards & comments)</label>
+    <label class="ckline"><input type="checkbox" checked=${soundOn} onChange=${(e) => { const on = e.target.checked; setSoundOnState(on); setSoundOn(on); if (on) play("done"); }}/> Sound effects (status chimes &amp; avatar voices)</label>
+    <div class="muted" style="font-size:12px;margin-bottom:4px">Chimes when an issue needs you or finishes; hovering an avatar plays its character voice. Off by default; stored in this browser.</div>
 
     <div class="sec" style="margin-top:18px">Run defaults</div>
     <label>New-issue default</label>

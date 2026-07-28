@@ -1,6 +1,7 @@
 // Persona avatar. crop="head" (dashboard: pre-cropped head) | "full" (detail: whole figure).
 // One avatar file per role (a mixed-gender team). Swap a value to change who represents a role.
 import { html } from "/web/vendor/standalone.mjs";
+import { playVoice } from "../../lib/sound.js";
 
 const ROLE_AVATAR = { planner: "planner-f", plan: "planner-f", decomposer: "auditor", architect: "architect", arch: "architect", developer: "developer-f", dev: "developer-f", coder: "developer-f", reviewer: "reviewer", review: "reviewer", tester: "tester", test: "tester", librarian: "librarian-f", auditor: "auditor", analyzer: "auditor", orchestrator: "planner", orch: "planner" };
 const ROLE_WORDS = ["planner", "decomposer", "architect", "developer", "reviewer", "tester", "librarian", "auditor", "analyzer"];
@@ -22,5 +23,6 @@ export function avatarFile(role, crop) {
 export const Avatar = ({ role, size = 24, crop = "head", src }) => {
   const w = src ? size : (crop === "full" ? Math.round(size * 0.82) : size);
   const h = size;
-  return html`<span class=${"avi " + crop + (src ? " custom" : "")} style=${"width:" + w + "px;height:" + h + "px"} title=${(role || "agent") + " agent"}><img src=${src || avatarFile(role, crop)} alt=${(role || "agent") + " avatar"} loading="lazy"/></span>`;
+  // Hovering a persona head plays its own short character "voice" (no-op unless sound is enabled).
+  return html`<span class=${"avi " + crop + (src ? " custom" : "")} style=${"width:" + w + "px;height:" + h + "px"} title=${(role || "agent") + " agent"} onMouseEnter=${() => playVoice(role)}><img src=${src || avatarFile(role, crop)} alt=${(role || "agent") + " avatar"} loading="lazy"/></span>`;
 };
