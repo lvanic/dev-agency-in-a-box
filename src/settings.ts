@@ -37,6 +37,7 @@ export const OPS_SETTINGS = [
   { key: "github_owner", env: "GITHUB_OWNER", type: "str", def: "", label: "GitHub owner / org" },
   { key: "concurrency", env: "AGENCY_CONCURRENCY", type: "num", def: 3, label: "Max concurrent runs" },
   { key: "poll_interval_seconds", env: "POLL_INTERVAL_SECONDS", type: "num", def: 60, label: "Poll interval (seconds, watch mode)" },
+  { key: "github_rate_limit_min", env: "GITHUB_RATE_LIMIT_MIN", type: "num", def: 150, label: "Min GitHub API quota before scanning a repo" },
   { key: "followup_window_days", env: "FOLLOWUP_WINDOW_DAYS", type: "num", def: 21, label: "Re-engage closed threads within (days)" },
   { key: "max_issue_cost_usd", env: "MAX_ISSUE_COST_USD", type: "num", def: 15, label: "Max $ per issue (0 = off)" },
   { key: "max_issue_turns", env: "MAX_ISSUE_TURNS", type: "num", def: 800, label: "Max agent turns per issue" },

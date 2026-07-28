@@ -38,6 +38,8 @@ import {
   closeIssue,
   canTrigger,
   upsertTrackerComment,
+  ghCoreRateRemaining,
+  rateBudgetTooLow,
   type Issue,
 } from "./github.js";
 import { seedAdmin, resetAdminPassword } from "./auth.js";
@@ -964,6 +966,20 @@ const recentEnough = (iso: string): boolean =>
 
 /** Scan one repo and dispatch all eligible work to the pool (deduped by key). */
 async function scanRepo(cfg: Config, repo: string): Promise<void> {
+  // Preventive rate-limit pre-flight (#159): a full multi-issue scan makes many `gh` calls, so one
+  // cheap `gh api rate_limit` read up front lets us SKIP a repo whose GitHub quota is already low —
+  // rather than starting and tripping the reactive circuit breaker partway through. Fail-open: a
+  // null reading (no token / probe failed) means "proceed". Threshold <= 0 disables the check.
+  const rateFloor = sNum("github_rate_limit_min", "GITHUB_RATE_LIMIT_MIN", 150);
+  if (rateFloor > 0) {
+    const remaining = await ghCoreRateRemaining();
+    if (rateBudgetTooLow(remaining, rateFloor)) {
+      recordIncident("github-rate-preflight", `skipped scan of ${repo}: ${remaining} core-API calls left (< ${rateFloor})`);
+      console.warn(`[agency] skip scan ${repo} — GitHub quota low (${remaining} < ${rateFloor}); waiting for reset`);
+      return;
+    }
+  }
+
   // While walled off by the usage limit, don't start NEW agent work (it would just fail and
   // burn attempts). reconcileEpics below still runs; parked work auto-resumes after the reset.
   const paused = agentsArePaused();

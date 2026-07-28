@@ -70,6 +70,35 @@ function circuitError(): Error {
   return new Error(`gh circuit open (${circuitReason || "GitHub rate limit"}) — retry after ${new Date(circuitOpenUntil).toISOString()}`);
 }
 
+/**
+ * PREVENTIVE companion to the reactive circuit breaker (issue #159): one cheap `gh api rate_limit`
+ * read of the remaining GitHub core-API quota, used to decide whether to START a GitHub-heavy repo
+ * scan at all. A full multi-issue scan makes many `gh` calls; if the budget is already low we skip
+ * the tick rather than starting and tripping the circuit breaker partway through.
+ *
+ * FAIL-OPEN: returns null on any problem (no token / non-numeric / network / circuit open) so a
+ * flaky quota probe never blocks scans — the caller treats null as "proceed".
+ */
+/**
+ * Pure decision for the #159 pre-flight: skip a scan only when the quota reading is a real number
+ * below a positive floor. A null reading (probe failed → fail-open) or a floor <= 0 (check disabled)
+ * both mean "proceed". Kept separate from the I/O so it's unit-testable.
+ */
+export function rateBudgetTooLow(remaining: number | null, floor: number): boolean {
+  return floor > 0 && remaining !== null && remaining < floor;
+}
+
+export async function ghCoreRateRemaining(): Promise<number | null> {
+  if (circuitOpen()) return null; // don't burn a probe while the breaker is already open
+  try {
+    const out = await gh(["api", "rate_limit", "--jq", ".resources.core.remaining"]);
+    const n = Number(out.trim());
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Run gh as the human owner ("acts as you"); empty token falls back to the stored owner/bot token. */
 async function ghAs(token: string, args: string[]): Promise<string> {
   if (circuitOpen()) throw circuitError();
