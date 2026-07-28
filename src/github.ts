@@ -330,6 +330,12 @@ export async function prMerged(repo: string, branch: string): Promise<boolean> {
 /** Marker on the single epic tracking comment so we update it in place instead of spamming. */
 export const EPIC_MARKER = "<!-- epic-tracker -->";
 
+/** True when a stored comment body equals a freshly-rendered one. GitHub stores CRLF, so we
+ *  normalize line endings before comparing — lets upsertTrackerComment skip a no-op PATCH. */
+export function trackerBodyUnchanged(existing: string, full: string): boolean {
+  return existing.replace(/\r\n/g, "\n") === full.replace(/\r\n/g, "\n");
+}
+
 /** Create-or-update the one epic tracking comment on a parent issue. */
 export async function upsertTrackerComment(repo: string, parent: number, body: string): Promise<void> {
   const full = `${body}\n\n${EPIC_MARKER}\n${AGENCY_MARKER}`;
@@ -338,10 +344,14 @@ export async function upsertTrackerComment(repo: string, parent: number, body: s
   // comment each pass → hundreds of notification emails). Raw fetch + tolerant parse.
   const out = await gh(["api", `repos/${repo}/issues/${parent}/comments`, "--paginate", "-f", "per_page=100"]).catch(() => "");
   let id = 0;
+  let existingBody = "";
   for (const c of parseGhCommentsJson(out)) {
-    if ((c.body || "").includes(EPIC_MARKER)) id = c.id ?? id;
+    if ((c.body || "").includes(EPIC_MARKER)) { id = c.id ?? id; existingBody = c.body || ""; }
   }
   if (id) {
+    // Skip the PATCH when nothing changed — this fires per-scan on epics, so identical re-writes are
+    // the common case.
+    if (trackerBodyUnchanged(existingBody, full)) return;
     await gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${id}`, "-f", `body=${full}`]).catch(() => {});
   } else {
     await gh(["api", "-X", "POST", `repos/${repo}/issues/${parent}/comments`, "-f", `body=${full}`]).catch(() => {});
@@ -776,6 +786,13 @@ export async function commentOnPr(repo: string, pr: number, body: string): Promi
 
 export async function closeIssue(repo: string, issue: number, comment?: string, reason?: "completed" | "not planned"): Promise<void> {
   if (comment) await commentOnIssue(repo, issue, comment);
+  // Skip the close write when the issue is already closed. Hot path: a merged PR with `Closes #N`
+  // auto-closes the issue, then the auto-merge loop (runner.ts) and epic finish (epics.ts) both call
+  // closeIssue again → a redundant `gh issue close` every time. Comment above is DB-first/cheap; keep it.
+  const state = await gh(["issue", "view", String(issue), "--repo", repo, "--json", "state"]).catch(() => "");
+  try {
+    if ((JSON.parse(state || "{}") as { state?: string }).state === "CLOSED") return;
+  } catch { /* couldn't read state → fall through and attempt the close */ }
   const args = ["issue", "close", String(issue), "--repo", repo];
   if (reason) args.push("--reason", reason);
   await gh(args).catch(() => {});
