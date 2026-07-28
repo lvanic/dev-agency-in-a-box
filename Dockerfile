@@ -10,6 +10,7 @@ ARG WITH_PYTHON=1
 ARG WITH_AUDITOR=1
 ARG WITH_GITNEXUS=1
 ARG WITH_PI=1
+ARG WITH_PIPER=1
 
 # git (for branches/commits) and gh (GitHub CLI used by the agency and the agents).
 RUN apt-get update \
@@ -54,6 +55,22 @@ WORKDIR /app
 
 # Enable corepack so agents can use pnpm / yarn in target repos (not just npm).
 RUN corepack enable || true
+
+# Piper neural TTS — gives each agent an individual spoken voice (dashboard avatar hover + status
+# announcements via the /tts route → src/tts.ts). Just the ~20MB binary + espeak-ng data is baked
+# here (arch-aware, amd64→x86_64 / arm64→aarch64); voice models are downloaded lazily at runtime to
+# the data volume on first use (nothing large in the image). Best-effort: the build never fails on
+# it, and at runtime the dashboard falls back to the browser Web Speech API if piper is absent.
+RUN if [ "$WITH_PIPER" = "1" ]; then set -eux; \
+    case "$(dpkg --print-architecture)" in amd64) parch=x86_64 ;; arm64) parch=aarch64 ;; *) parch="" ;; esac; \
+    if [ -n "$parch" ]; then \
+      curl -fsSL "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_${parch}.tar.gz" \
+        -o /tmp/piper.tgz \
+      && tar -xzf /tmp/piper.tgz -C /opt \
+      && rm -f /tmp/piper.tgz \
+      && /opt/piper/piper --help >/dev/null 2>&1 || echo "piper installed (help check best-effort)"; \
+    else echo "skip piper — unsupported arch"; fi; \
+    else echo "skip piper (WITH_PIPER=0) — avatar voices fall back to the browser Web Speech API"; fi
 
 # Optional: GitNexus code-intelligence (token-light codebase research via MCP). Best-effort —
 # the build never fails on it, and the runtime only uses it when GITNEXUS=true. Skipping the

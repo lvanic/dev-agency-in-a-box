@@ -30,6 +30,7 @@ async function resolveRunTarget(repo: string, number: number, target: string | n
   return `agency/issue-${number}`;
 }
 import { versionInfo } from "./version.js";
+import { synth, TTS_ROLES } from "./tts.js";
 import { startDeviceFlow, pollDeviceToken, fetchGitHubUser } from "./github-oauth.js";
 import { githubOAuthClientId, githubOAuthToken, githubIdentity } from "./creds.js";
 import { binaryAvailable } from "./runners/registry.js";
@@ -407,6 +408,21 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         if (!att) return void res.writeHead(404).end("not found");
         res.writeHead(200, { "content-type": att.mime || "application/octet-stream", "cache-control": "public, max-age=31536000, immutable" });
         return void res.end(att.bytes);
+      }
+      // Spoken avatar voice (Piper TTS). Authed (we're past the session gate), role-whitelisted and
+      // text-capped in synth(). Returns a wav the browser plays; 503 on any soft failure so the
+      // client falls back to the Web Speech API. Deterministic per (role, text) → long-cacheable.
+      if (url === "/tts") {
+        const q = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
+        const role = q.get("role") ?? "";
+        const text = q.get("text") ?? "";
+        if (!TTS_ROLES.includes(role.toLowerCase()) || !text.trim()) return void res.writeHead(400).end("bad request");
+        void synth(role, text).then((buf) => {
+          if (!buf) return void res.writeHead(503, { "cache-control": "no-store" }).end("tts unavailable");
+          res.writeHead(200, { "content-type": "audio/wav", "cache-control": "public, max-age=86400" });
+          res.end(buf);
+        }).catch(() => { if (!res.headersSent) res.writeHead(503).end("tts error"); });
+        return;
       }
       if (url === "/data") {
         const midnight = new Date();

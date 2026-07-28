@@ -119,10 +119,11 @@ function App() {
   // on a transition (never on first load, never every render). Off unless enabled in Settings.
   const soundPrevRef = useRef(null);
   useEffect(() => {
-    const cur = {};
-    (data.issues || []).forEach((i) => { cur[i.repo + "#" + i.number] = soundEvent(i); });
+    const cur = {}, byKey = {};
+    (data.issues || []).forEach((i) => { cur[i.repo + "#" + i.number] = soundEvent(i); byKey[i.repo + "#" + i.number] = i; });
     const prev = soundPrevRef.current;
-    if (prev) { for (const k in cur) { if (cur[k] && cur[k] !== prev[k]) playCue(cur[k]); } }
+    // On a transition, the agent SPEAKS the issue ("review ready, issue 234") — pass number/role/blocked.
+    if (prev) { for (const k in cur) { if (cur[k] && cur[k] !== prev[k]) { const i = byKey[k] || {}; playCue(cur[k], i.number, i.role, i.blocked); } } }
     soundPrevRef.current = cur;
   }, [data.issues]);
 
