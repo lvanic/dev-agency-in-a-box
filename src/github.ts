@@ -827,6 +827,14 @@ export async function closeIssue(repo: string, issue: number, comment?: string, 
   await gh(args).catch(() => {});
 }
 
+/** Reopen a closed issue. Idempotent — `gh` errors harmlessly if it's already open (caught). Used
+ *  when a human comments on a delivered (closed) issue and the agency re-engages: the issue must go
+ *  back to open so the board flows done→working→review and the closed-thread backstop stops forcing
+ *  the card to `done` while the follow-up fix is in flight. */
+export async function reopenIssue(repo: string, issue: number): Promise<void> {
+  await gh(["issue", "reopen", String(issue), "--repo", repo]).catch(() => {});
+}
+
 /** Fetch a single issue (any state) as an Issue, or null if it can't be read — or if the number
  *  is actually a PR. `gh issue view` resolves PR numbers too (GitHub's API treats PRs as issues),
  *  and this is the funnel every force* dispatch reads through, so rejecting PRs here keeps

@@ -36,6 +36,7 @@ import {
   repoBaseBranch,
   prMerged,
   closeIssue,
+  reopenIssue,
   canTrigger,
   upsertTrackerComment,
   ghCoreRateRemaining,
@@ -534,8 +535,13 @@ async function processHealOne(
 }
 
 /** Re-engage a thread the agency already delivered (often after a merge): build a fix PR. */
-async function processFollowUp(cfg: Config, repo: string, issue: Issue): Promise<void> {
+async function processFollowUp(cfg: Config, repo: string, issue: Issue, closed = false): Promise<void> {
   console.log(`[agency] ${repo} #${issue.number}: follow-up on a new comment`);
+  // A follow-up on a CLOSED (delivered) issue must reopen it on GitHub first. Otherwise the
+  // closed-thread backstop in scanRepo forces the card straight back to `done` on the next scan —
+  // clobbering working/review, so the merge button for the follow-up fix PR never survives. Reopen
+  // → board flows done→working→review; merging the fix PR re-closes it.
+  if (closed) await reopenIssue(repo, issue.number).catch(() => {});
   recordIssueStatus(repo, issue.number, withStatus("working"), { title: issue.title, role: "developer" });
 
   const thread = await commentThread(repo, issue.number);
@@ -1105,7 +1111,7 @@ async function scanRepo(cfg: Config, repo: string): Promise<void> {
       const pr = { number: openPr.number, title: t.title, branch: `agency/issue-${t.number}`, issueNumber: t.number };
       dispatch(`${repo}#pr-${pr.number}`, () => processPrFeedbackOne(repo, pr, thread).finally(release));
     } else if (action === "followup") {
-      dispatch(`${repo}#${t.number}`, () => processFollowUp(cfg, repo, issue).finally(release));
+      dispatch(`${repo}#${t.number}`, () => processFollowUp(cfg, repo, issue, t.closed).finally(release));
     } else {
       // fresh or resume — processIssue picks the role and sorts approve/answer/change.
       dispatch(`${repo}#${t.number}`, () => processIssue(cfg, repo, issue).finally(release));
