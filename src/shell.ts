@@ -1292,8 +1292,8 @@ textarea{resize:vertical;min-height:64px}
 .orch-empty .obki{width:54px;height:54px;border-radius:16px;background:var(--accent-weak);color:var(--accent);display:flex;align-items:center;justify-content:center;margin:0 auto 12px}
 .orch-empty .obh{font-size:17px;font-weight:600;color:var(--ink);margin-bottom:6px}
 .orch-empty .obsub{font-size:14px;line-height:1.6}
-.obub{display:flex;gap:10px;max-width:100%}
-.obub-av{flex:none;width:26px;height:26px;border-radius:50%;overflow:hidden}
+.obub{display:flex;gap:4px;max-width:100%;align-items:flex-start}
+.obub-av{flex:none;align-self:flex-start;overflow:visible;line-height:0;position:relative;z-index:1;margin:-18px -6px 0 0}
 .obub-body{min-width:0;max-width:88%}
 .obub-user{flex-direction:row-reverse}
 .obub-user .obub-body{max-width:80%}
