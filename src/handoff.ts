@@ -351,7 +351,10 @@ export const PLANNER_HANDOFF_INSTRUCTION =
   '{"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}. ' +
   'Add `"multi":true` only when the human may pick SEVERAL choices at once (select-all-that-apply); ' +
   "omit it for a single pick. Still write the full question in prose below the line. " +
-  "To ask MORE THAN ONE question in the same round (each with its own choices), use `qs` instead of " +
-  '`q`/`opts` — a list of up to 4 questions: {"v":1,"phase":"plan","qs":[{"q":"Flutter or Expo?",' +
-  '"opts":["Flutter","Expo"]},{"q":"Ship dark mode now?","opts":["Yes","Later"]}]}. The human answers ' +
-  "all of them in one form and submits once.";
+  "To ask MORE THAN ONE question in the same round, use `qs` instead of `q`/`opts` — a list of up to " +
+  '4 questions, each with its own `q` (and `opts` when it has discrete choices): ' +
+  '{"v":1,"phase":"plan","qs":[{"q":"Flutter or Expo?","opts":["Flutter","Expo"]},{"q":"Where should ' +
+  'the audio come from?"}]}. A question with NO `opts` renders as a free-text box the human types into; ' +
+  "a question WITH `opts` renders as buttons. The human answers them all in one form and submits once. " +
+  "ALWAYS put every question you ask into the HANDOFF line's `q`/`opts`/`qs` — NEVER ask questions only " +
+  "in prose and NEVER via a tool. Open-ended asks still go in `qs` (just omit their `opts`).";

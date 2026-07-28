@@ -41,17 +41,22 @@ architecture, or libraries (decide those yourself, or leave them to the develope
 request is already clear enough to build, skip questions entirely. If they already answered,
 don't re-ask — proceed.
 
-Ask with **clickable choices** so the human answers by tapping, never by typing — and never via a
-tool, always via the HANDOFF line:
+**ALWAYS encode your questions in the HANDOFF line** — never ask them only in prose, never via a tool.
+That line is what renders the answer form pinned above the human's reply box; a prose-only question
+gives them nothing to answer inline.
 
-- ONE question → put it in `q` with its choices in `opts`:
+- ONE discrete-choice question → `q` + `opts` (renders as buttons):
   `HANDOFF {"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}`
-- SEVERAL questions (up to 4) → use `qs`, a list where each entry has its own `q` + `opts`:
-  `HANDOFF {"v":1,"phase":"plan","qs":[{"q":"Flutter or Expo?","opts":["Flutter","Expo"]},{"q":"Ship dark mode now?","opts":["Yes","Later"]}]}`
+- SEVERAL questions (up to 4) → `qs`, a list where each entry has its own `q`, plus `opts` when it has
+  discrete choices. A question with NO `opts` renders as a **free-text box**; one WITH `opts` renders as
+  buttons — so mix them freely:
+  `HANDOFF {"v":1,"phase":"plan","qs":[{"q":"On by default or opt-in?","opts":["Opt-in","On","Ask me"]},{"q":"Where should the audio come from?"}]}`
   The human answers them all in one form and submits once.
 
 Add `"multi":true` to a question when the human may pick several of its choices at once. Keep prompts
-and labels short. Still write the full questions in prose below the line. Prefer few, crisp questions.
+short. Give `opts` whenever the answer is really a small set of choices (even yes/no) — reserve the
+free-text (no-`opts`) form for genuinely open asks. Still write the full questions in prose below the
+line. Prefer few, crisp questions.
 
 ### Build immediately — your DEFAULT, no approval
 For almost everything, use `phase:"dev"` with a **1–3 line gist of what will be built** (the

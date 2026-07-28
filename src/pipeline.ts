@@ -341,11 +341,13 @@ export function parsePlannerDecision(text: string): PlannerDecision {
  *  (text-only ask) — the message then renders as plain prose, unchanged. */
 type QuestionSpec = { prompt: string; options: string[]; multi: boolean };
 function questionMeta(decision: PlannerDecision): { question?: { options: string[]; multi: boolean }; questions?: QuestionSpec[] } | null {
-  // Several clickable questions in one round (each its own options) → the multi-question form.
+  // Several questions in one round → the multi-question form. Each keeps its own options (clickable
+  // buttons) OR, when it has none, renders as a free-text field — so open-ended asks are answered in
+  // the same pinned form, not only in the composer.
   if (decision.qs && decision.qs.length) {
     const questions: QuestionSpec[] = decision.qs
       .map((q) => ({ prompt: String(q.q ?? "").trim(), options: (q.opts ?? []).map((o) => String(o).trim()).filter(Boolean), multi: Boolean(q.multi) }))
-      .filter((q) => q.prompt && q.options.length);
+      .filter((q) => q.prompt);
     if (questions.length) return { questions };
   }
   const opts = (decision.opts || []).map((o) => String(o).trim()).filter(Boolean);

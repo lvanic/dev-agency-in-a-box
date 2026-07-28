@@ -198,6 +198,16 @@ test("decodeHandoff rejects a malformed qs (missing q, bad opts, or unknown key)
   assert.equal(decodeHandoff(`{"v":1,"phase":"plan","qs":{"q":"A?"}}`), null); // qs not an array
 });
 
+test("qs supports an open question with no opts (renders as a free-text box), mixed with a choice one", () => {
+  const h = { v: 1, phase: "plan", qs: [
+    { q: "On by default?", opts: ["Opt-in", "On"] },
+    { q: "Where should the audio come from?" },
+  ] };
+  const decoded = decodeHandoff(encodeHandoff(h));
+  assert.deepEqual(decoded, h);
+  assert.equal(decoded.qs[1].opts, undefined);
+});
+
 test("encodeHandoff caps qs at 4 questions", () => {
   const qs = Array.from({ length: 7 }, (_, i) => ({ q: `Q${i}?`, opts: ["a", "b"] }));
   const decoded = decodeHandoff(encodeHandoff({ v: 1, phase: "plan", qs }));

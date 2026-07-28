@@ -1350,6 +1350,8 @@ textarea{resize:vertical;min-height:64px}
 .mqpick-prompt{font-weight:600;font-size:13px;color:var(--ink)}
 .mqpick .optpick{margin-top:6px}
 .mqpick .optpick-submit{align-self:flex-start;margin-top:2px}
+.mqpick-text{margin-top:6px;width:100%;box-sizing:border-box;resize:vertical;min-height:38px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px;padding:8px 10px}
+.mqpick-text:focus{outline:none;border-color:var(--accent)}
 /* Frames the shared ChatComposer (same wrapper shape as .dcompose in Detail.js — that one's
    known-good). Used to be display:flex plus its own raw textarea rules from before this mounted
    ChatComposer; those non-important rules (background/border/padding, same specificity as
