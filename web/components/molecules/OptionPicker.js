@@ -9,7 +9,7 @@ import { Spinner } from "../atoms/Spinner.js";
 // A wire option is a plain string (label == what's sent) or {label, value} (value is sent, e.g. an
 // approve button labelled "👍 Build it" that actually sends "ok"). Normalize to {label, value}.
 function normOpt(o) {
-  if (o && typeof o === "object") return { label: String(o.label ?? o.value ?? ""), value: String(o.value ?? o.label ?? "") };
+  if (o && typeof o === "object") return { label: String(o.label ?? o.l ?? o.value ?? ""), value: String(o.value ?? o.label ?? o.l ?? "") };
   const s = String(o ?? "");
   return { label: s, value: s };
 }

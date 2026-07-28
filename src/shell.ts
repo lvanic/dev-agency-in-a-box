@@ -1343,15 +1343,30 @@ textarea{resize:vertical;min-height:64px}
 .optpick-btn .optpick-box{width:15px;height:15px;border:1.5px solid currentColor;border-radius:4px}
 .optpick-btn.on .optpick-box{background:#fff;border-color:#fff;color:var(--accent)}
 .optpick-btn.on .optpick-box svg{opacity:1}
-/* Several clickable questions in one round (MultiQuestionPicker): each prompt + its options stacked,
-   one Submit at the end. */
-.mqpick{display:flex;flex-direction:column;gap:12px;margin-top:8px}
-.mqpick-q{display:flex;flex-direction:column;gap:2px}
-.mqpick-prompt{font-weight:600;font-size:13px;color:var(--ink)}
-.mqpick .optpick{margin-top:6px}
-.mqpick .optpick-submit{align-self:flex-start;margin-top:2px}
-.mqpick-text{margin-top:6px;width:100%;box-sizing:border-box;resize:vertical;min-height:38px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px;padding:8px 10px}
+/* The agent's answer form (MultiQuestionPicker): one or more questions, each a prompt + option CARDS
+   (label + description, so the choice is self-explanatory) or a free-text box, then one Submit. */
+.mqpick{display:flex;flex-direction:column;gap:14px;margin-top:8px}
+.mqpick-q{display:flex;flex-direction:column;gap:7px}
+.mqpick-prompt{font-weight:600;font-size:13.5px;color:var(--ink);line-height:1.4}
+.mqpick-text{width:100%;box-sizing:border-box;resize:vertical;min-height:40px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px;padding:8px 10px}
 .mqpick-text:focus{outline:none;border-color:var(--accent)}
+/* Option cards. Full-width, stacked, so a description reads on its own line. Selected → accent frame. */
+.qopts{display:flex;flex-direction:column;gap:7px}
+.qopt{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:9px 11px;cursor:pointer;transition:border-color .12s,background .12s;font:inherit;color:var(--ink)}
+.qopt:hover:not(:disabled){border-color:var(--accent)}
+.qopt.on{border-color:var(--accent);background:var(--accent-weak)}
+.qopt:disabled{opacity:.55;cursor:default}
+.qopt-mark{flex:none;width:18px;height:18px;margin-top:1px;border:1.5px solid var(--line);display:inline-flex;align-items:center;justify-content:center;color:#fff}
+.qopt-mark.dot{border-radius:50%}
+.qopt-mark.box{border-radius:5px}
+.qopt-mark svg{opacity:0}
+.qopt.on .qopt-mark{background:var(--accent);border-color:var(--accent)}
+.qopt.on .qopt-mark svg{opacity:1}
+.qopt-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.qopt-label{font-weight:600;font-size:13px;line-height:1.35}
+.qopt-desc{font-size:12px;color:var(--ink-2);line-height:1.4}
+.qsubmit{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;border:0;background:var(--accent);color:#fff;font:600 13px inherit;padding:8px 15px;border-radius:10px;cursor:pointer;margin-top:2px}
+.qsubmit:disabled{opacity:.45;cursor:default}
 /* Frames the shared ChatComposer (same wrapper shape as .dcompose in Detail.js — that one's
    known-good). Used to be display:flex plus its own raw textarea rules from before this mounted
    ChatComposer; those non-important rules (background/border/padding, same specificity as

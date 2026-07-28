@@ -42,8 +42,9 @@ export interface Handoff {
   round?: number;
   /** A short open question or note (e.g. the planner's clarifying ask). Capped, see MAX_Q_LEN. */
   q?: string;
-  /** Clickable answer choices for `q` (renders as buttons/checkboxes in the run thread). Capped, see MAX_OPTS. */
-  opts?: string[];
+  /** Clickable answer choices for `q`. Each is a short label OR `{l,d}` (label + a one-line
+   *  description that makes the choice self-explanatory in the form). Capped, see MAX_OPTS. */
+  opts?: HandoffOpt[];
   /** True → `opts` is a multi-select (checkboxes + submit); false/omitted → single-pick buttons. */
   multi?: boolean;
   /** SEVERAL clickable questions in one round (each its own prompt + options), rendered as a single
@@ -52,20 +53,64 @@ export interface Handoff {
   qs?: HandoffQuestion[];
 }
 
+/** One answer choice: a bare label, or a label + a short description (so the form is self-explanatory
+ *  and the human needn't hunt for context in the prose above). */
+export type HandoffOpt = string | { l: string; d?: string };
+
 /** One question in a multi-question `qs` round: a prompt plus its own discrete answer choices. */
 export interface HandoffQuestion {
   q: string;
-  opts?: string[];
+  opts?: HandoffOpt[];
   multi?: boolean;
 }
 
 const ALLOWED_KEYS: ReadonlySet<string> = new Set(["v", "phase", "br", "files", "test", "verdict", "round", "q", "opts", "multi", "qs"]);
 const Q_KEYS: ReadonlySet<string> = new Set(["q", "opts", "multi"]);
+const OPT_KEYS: ReadonlySet<string> = new Set(["l", "d"]);
 const MAX_FILES = 12;
 const MAX_Q_LEN = 240;
 const MAX_OPTS = 6;
 const MAX_OPT_LEN = 120;
+const MAX_OPT_DESC_LEN = 200;
 const MAX_QS = 4;
+
+/** Normalize + cap one round of answer choices for the wire. Drops empties; keeps a bare string when
+ *  there's no description, else `{l,d}`. Returns [] when nothing survives. */
+function encodeOpts(opts: HandoffOpt[] | undefined): HandoffOpt[] {
+  if (!opts || !opts.length) return [];
+  const out: HandoffOpt[] = [];
+  // Drop blanks BEFORE capping so an empty entry never consumes one of the MAX_OPTS slots.
+  for (const o of opts) {
+    if (o && typeof o === "object") {
+      const l = String(o.l ?? "").trim().slice(0, MAX_OPT_LEN);
+      if (!l) continue;
+      const d = String(o.d ?? "").trim().slice(0, MAX_OPT_DESC_LEN);
+      out.push(d ? { l, d } : l);
+    } else {
+      const l = String(o ?? "").trim().slice(0, MAX_OPT_LEN);
+      if (l) out.push(l);
+    }
+    if (out.length >= MAX_OPTS) break;
+  }
+  return out;
+}
+
+/** Strictly validate a wire `opts` array → HandoffOpt[] | null (null = invalid, caller rejects). */
+function decodeOpts(raw: unknown): HandoffOpt[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: HandoffOpt[] = [];
+  for (const o of raw) {
+    if (typeof o === "string") { const l = o.trim(); if (l) out.push(l); continue; }
+    if (!o || typeof o !== "object" || Array.isArray(o)) return null;
+    const it = o as Record<string, unknown>;
+    for (const k of Object.keys(it)) if (!OPT_KEYS.has(k)) return null;
+    if (typeof it.l !== "string" || !it.l.trim()) return null;
+    if (it.d !== undefined && typeof it.d !== "string") return null;
+    const d = typeof it.d === "string" ? it.d.trim() : "";
+    out.push(d ? { l: it.l.trim(), d } : it.l.trim());
+  }
+  return out;
+}
 
 /** Input to encodeHandoff/buildHandoff — every field but `phase` is optional (and dropped when empty). */
 export type HandoffInput = Partial<Omit<Handoff, "v" | "phase">> & { phase: HandoffPhase };
@@ -84,13 +129,13 @@ export function encodeHandoff(h: HandoffInput): string {
   if (typeof h.round === "number" && Number.isFinite(h.round) && h.round > 0) out.round = h.round;
   if (h.q && h.q.trim()) out.q = h.q.trim().slice(0, MAX_Q_LEN);
   if (h.opts && h.opts.length) {
-    const opts = h.opts.map((o) => String(o).trim()).filter(Boolean).slice(0, MAX_OPTS).map((o) => o.slice(0, MAX_OPT_LEN));
+    const opts = encodeOpts(h.opts);
     if (opts.length) { out.opts = opts; if (h.multi) out.multi = true; }
   }
   if (h.qs && h.qs.length) {
     const qs = h.qs.slice(0, MAX_QS).map((q) => {
       const qo: Record<string, unknown> = { q: String(q.q ?? "").trim().slice(0, MAX_Q_LEN) };
-      const opts = (q.opts ?? []).map((o) => String(o).trim()).filter(Boolean).slice(0, MAX_OPTS).map((o) => o.slice(0, MAX_OPT_LEN));
+      const opts = encodeOpts(q.opts);
       if (opts.length) qo.opts = opts;
       if (q.multi) qo.multi = true;
       return qo;
@@ -145,8 +190,8 @@ export function decodeHandoff(s: string): Handoff | null {
     out.q = o.q;
   }
   if (o.opts !== undefined) {
-    if (!Array.isArray(o.opts) || !o.opts.every((x) => typeof x === "string")) return null;
-    const opts = (o.opts as string[]).map((x) => x.trim()).filter(Boolean);
+    const opts = decodeOpts(o.opts);
+    if (opts === null) return null;
     if (opts.length) out.opts = opts;
   }
   if (o.multi !== undefined) {
@@ -163,8 +208,8 @@ export function decodeHandoff(s: string): Handoff | null {
       if (typeof it.q !== "string" || !it.q.trim()) return null;
       const qq: HandoffQuestion = { q: it.q };
       if (it.opts !== undefined) {
-        if (!Array.isArray(it.opts) || !it.opts.every((x) => typeof x === "string")) return null;
-        const opts = (it.opts as string[]).map((x) => x.trim()).filter(Boolean);
+        const opts = decodeOpts(it.opts);
+        if (opts === null) return null;
         if (opts.length) qq.opts = opts;
       }
       if (it.multi !== undefined) {
@@ -345,16 +390,21 @@ export const PLANNER_HANDOFF_INSTRUCTION =
   "(keep q short — a few words; ask in full below); " +
   '{"v":1,"phase":"dev"} if this is small enough to build right away with no approval step (your ' +
   'default); or {"v":1,"phase":"plan"} if you have a plan that should be proposed for approval first ' +
-  "(large or cross-cutting change). Put the full questions/plan in prose on the lines after it. " +
-  "When your question has DISCRETE answer choices, add them so the human can click instead of type: " +
-  'set `"opts"` to the list of choices (max 6, short labels), e.g. ' +
-  '{"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}. ' +
-  'Add `"multi":true` only when the human may pick SEVERAL choices at once (select-all-that-apply); ' +
-  "omit it for a single pick. Still write the full question in prose below the line. " +
-  "To ask MORE THAN ONE question in the same round, use `qs` instead of `q`/`opts` — a list of up to " +
-  '4 questions, each with its own `q` (and `opts` when it has discrete choices): ' +
-  '{"v":1,"phase":"plan","qs":[{"q":"Flutter or Expo?","opts":["Flutter","Expo"]},{"q":"Where should ' +
-  'the audio come from?"}]}. A question with NO `opts` renders as a free-text box the human types into; ' +
-  "a question WITH `opts` renders as buttons. The human answers them all in one form and submits once. " +
-  "ALWAYS put every question you ask into the HANDOFF line's `q`/`opts`/`qs` — NEVER ask questions only " +
-  "in prose and NEVER via a tool. Open-ended asks still go in `qs` (just omit their `opts`).";
+  "(large or cross-cutting change). " +
+  "The `q`/`opts`/`qs` line is what renders the answer FORM the human clicks — so it must be " +
+  "self-explanatory ON ITS OWN, not lean on the prose above it. Rules for questions:\n" +
+  "• `q` is the actual question, written in FULL (not a 2-word stub) — it is shown as the form's heading.\n" +
+  "• Each choice in `opts` is `{\"l\":\"Short label\",\"d\":\"one line explaining what picking this means\"}` " +
+  "— ALWAYS give the `d` description when the label alone isn't obvious (put the explanation IN the option, " +
+  "not only in prose). A plain string is allowed only for a truly self-evident choice (e.g. \"Yes\"/\"No\").\n" +
+  '  e.g. {"v":1,"phase":"plan","q":"Where should sound effects come from?","opts":[' +
+  '{"l":"Royalty-free pack","d":"bundle a small set of CC0 clips in the repo"},' +
+  '{"l":"Generate (ElevenLabs)","d":"synthesize per-event via the ElevenLabs API + a key"},' +
+  '{"l":"You decide","d":"pick whatever is simplest"}]}\n' +
+  '• `"multi":true` only when the human may pick SEVERAL choices at once (select-all-that-apply).\n' +
+  "• MORE THAN ONE question in a round → `qs`, a list (max 4) of `{q, opts?, multi?}` with the same " +
+  'rules per entry: {"v":1,"phase":"plan","qs":[{"q":"On by default or opt-in?","opts":[' +
+  '{"l":"Opt-in","d":"silent until enabled in settings"},{"l":"On","d":"plays out of the box"}]},' +
+  '{"q":"Where should the audio come from?"}]}. An entry with NO `opts` renders as a free-text box.\n' +
+  "ALWAYS put every question into the HANDOFF line (`q`/`opts`/`qs`) — NEVER ask only in prose and NEVER " +
+  "via a tool. You may still add brief context in prose below, but the form must stand alone.";

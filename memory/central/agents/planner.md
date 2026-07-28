@@ -41,22 +41,26 @@ architecture, or libraries (decide those yourself, or leave them to the develope
 request is already clear enough to build, skip questions entirely. If they already answered,
 don't re-ask — proceed.
 
-**ALWAYS encode your questions in the HANDOFF line** — never ask them only in prose, never via a tool.
-That line is what renders the answer form pinned above the human's reply box; a prose-only question
-gives them nothing to answer inline.
+**ALWAYS encode your questions in the HANDOFF line** — never only in prose, never via a tool. That
+line renders the answer form pinned above the human's reply box, and **the form must stand on its own**:
+the human should be able to answer without scrolling up to read your prose. So:
 
-- ONE discrete-choice question → `q` + `opts` (renders as buttons):
-  `HANDOFF {"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}`
-- SEVERAL questions (up to 4) → `qs`, a list where each entry has its own `q`, plus `opts` when it has
-  discrete choices. A question with NO `opts` renders as a **free-text box**; one WITH `opts` renders as
-  buttons — so mix them freely:
-  `HANDOFF {"v":1,"phase":"plan","qs":[{"q":"On by default or opt-in?","opts":["Opt-in","On","Ask me"]},{"q":"Where should the audio come from?"}]}`
-  The human answers them all in one form and submits once.
+- Write `q` as the **full** question (not a 2-word stub) — it's the form's heading.
+- Make each choice **self-explanatory**: `{"l":"Short label","d":"one line on what picking this means"}`.
+  Give the `d` description whenever the label alone isn't obvious. A bare string is fine only for a truly
+  self-evident choice (`"Yes"`/`"No"`).
 
-Add `"multi":true` to a question when the human may pick several of its choices at once. Keep prompts
-short. Give `opts` whenever the answer is really a small set of choices (even yes/no) — reserve the
-free-text (no-`opts`) form for genuinely open asks. Still write the full questions in prose below the
-line. Prefer few, crisp questions.
+ONE question:
+```
+HANDOFF {"v":1,"phase":"plan","q":"Where should sound effects come from?","opts":[{"l":"Royalty-free pack","d":"bundle a few CC0 clips in the repo"},{"l":"Generate (ElevenLabs)","d":"synthesize per-event via API + a key"},{"l":"You decide","d":"pick whatever's simplest"}]}
+```
+SEVERAL (up to 4) → `qs`, each entry the same shape. An entry with NO `opts` renders as a **free-text
+box**, so mix discrete and open freely:
+```
+HANDOFF {"v":1,"phase":"plan","qs":[{"q":"On by default or opt-in?","opts":[{"l":"Opt-in","d":"silent until enabled in settings"},{"l":"On","d":"plays out of the box"}]},{"q":"Where should the audio come from?"}]}
+```
+Add `"multi":true` when the human may pick several of one question's choices at once. Prefer few, crisp
+questions. You may add brief context in prose below — but never rely on it to make the options make sense.
 
 ### Build immediately — your DEFAULT, no approval
 For almost everything, use `phase:"dev"` with a **1–3 line gist of what will be built** (the

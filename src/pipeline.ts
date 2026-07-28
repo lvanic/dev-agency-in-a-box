@@ -40,6 +40,7 @@ import {
   type HandoffPhase,
   type Handoff,
   type HandoffQuestion,
+  type HandoffOpt,
 } from "./handoff.js";
 // True if the user has stopped this issue — every phase checks this before doing ANY work so Stop
 // means "no next agent, no next step, no commit/PR". (runRole has its own guard for the agent run.)
@@ -302,7 +303,7 @@ export function handoffBlock(repo: string, number: number, phase: HandoffPhase, 
   ].join("");
 }
 
-export type PlannerDecision = { kind: "questions" | "plan"; body: string; auto: boolean; structured: boolean; opts?: string[]; multi?: boolean; qs?: HandoffQuestion[] };
+export type PlannerDecision = { kind: "questions" | "plan"; body: string; auto: boolean; structured: boolean; q?: string; opts?: HandoffOpt[]; multi?: boolean; qs?: HandoffQuestion[] };
 
 /** Legacy fallback: first-word keyword sniff (QUESTIONS / PLAN [AUTO]). Used only when the planner's
  *  reply doesn't carry a valid structured `HANDOFF` first line (models sometimes drift) — never a
@@ -327,7 +328,7 @@ function parsePlannerDecisionFallback(text: string): PlannerDecision {
 export function parsePlannerDecision(text: string): PlannerDecision {
   const { handoff, rest } = extractHandoffLine(text);
   if (handoff && handoff.phase === "plan" && handoff.qs && handoff.qs.length) return { kind: "questions", body: rest, auto: false, structured: true, qs: handoff.qs };
-  if (handoff && handoff.phase === "plan" && handoff.q) return { kind: "questions", body: rest || handoff.q, auto: false, structured: true, opts: handoff.opts, multi: handoff.multi };
+  if (handoff && handoff.phase === "plan" && handoff.q) return { kind: "questions", body: rest || handoff.q, auto: false, structured: true, q: handoff.q, opts: handoff.opts, multi: handoff.multi };
   if (handoff && handoff.phase === "dev") return { kind: "plan", body: rest, auto: true, structured: true };
   if (handoff && handoff.phase === "plan") return { kind: "plan", body: rest, auto: false, structured: true };
   // `rest` (not the raw `text`): extractHandoffLine already strips a HANDOFF-TAGGED line even when its
@@ -339,20 +340,29 @@ export function parsePlannerDecision(text: string): PlannerDecision {
 /** Build the `{question}` run-thread meta from a planner decision, so the dashboard renders the
  *  answer choices as clickable buttons/checkboxes. Returns null when the question has no options
  *  (text-only ask) — the message then renders as plain prose, unchanged. */
-type QuestionSpec = { prompt: string; options: string[]; multi: boolean };
-function questionMeta(decision: PlannerDecision): { question?: { options: string[]; multi: boolean }; questions?: QuestionSpec[] } | null {
-  // Several questions in one round → the multi-question form. Each keeps its own options (clickable
-  // buttons) OR, when it has none, renders as a free-text field — so open-ended asks are answered in
-  // the same pinned form, not only in the composer.
+type OptionSpec = { label: string; desc?: string };
+type QuestionSpec = { prompt: string; options: OptionSpec[]; multi: boolean };
+/** Normalize wire options (bare string | `{l,d}`) → the {label, desc} shape the dashboard renders. */
+function normOptions(opts: HandoffOpt[] | undefined): OptionSpec[] {
+  return (opts ?? [])
+    .map((o) => (o && typeof o === "object")
+      ? { label: String(o.l ?? "").trim(), desc: String(o.d ?? "").trim() || undefined }
+      : { label: String(o ?? "").trim() })
+    .filter((o) => o.label);
+}
+function questionMeta(decision: PlannerDecision): { question?: QuestionSpec; questions?: QuestionSpec[] } | null {
+  // Several questions in one round → the multi-question form. Each keeps its own options (buttons/cards)
+  // OR, when it has none, renders as a free-text field — so open-ended asks are answered in the same
+  // pinned form, not only in the composer.
   if (decision.qs && decision.qs.length) {
     const questions: QuestionSpec[] = decision.qs
-      .map((q) => ({ prompt: String(q.q ?? "").trim(), options: (q.opts ?? []).map((o) => String(o).trim()).filter(Boolean), multi: Boolean(q.multi) }))
+      .map((q) => ({ prompt: String(q.q ?? "").trim(), options: normOptions(q.opts), multi: Boolean(q.multi) }))
       .filter((q) => q.prompt);
     if (questions.length) return { questions };
   }
-  const opts = (decision.opts || []).map((o) => String(o).trim()).filter(Boolean);
-  if (!opts.length) return null;
-  return { question: { options: opts, multi: Boolean(decision.multi) } };
+  const options = normOptions(decision.opts);
+  if (!options.length) return null;
+  return { question: { prompt: String(decision.q ?? "").trim(), options, multi: Boolean(decision.multi) } };
 }
 
 /** Run the Planner once. Returns the decision and the model used (for the ledger). */

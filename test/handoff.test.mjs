@@ -214,6 +214,32 @@ test("encodeHandoff caps qs at 4 questions", () => {
   assert.equal(decoded.qs.length, 4);
 });
 
+test("opts accept {l,d} described choices, round-trip, mixed with bare strings", () => {
+  const h = { v: 1, phase: "plan", q: "Where should sound come from?", opts: [
+    { l: "Royalty-free pack", d: "bundle CC0 clips in the repo" },
+    { l: "Generate (ElevenLabs)", d: "synthesize via API + a key" },
+    "You decide",
+  ] };
+  assert.deepEqual(decodeHandoff(encodeHandoff(h)), h);
+});
+
+test("a described option with an empty d collapses to a bare string label", () => {
+  const decoded = decodeHandoff(encodeHandoff({ v: 1, phase: "plan", q: "Pick", opts: [{ l: "A", d: "" }, { l: "B" }] }));
+  assert.deepEqual(decoded.opts, ["A", "B"]);
+});
+
+test("decodeHandoff rejects a described option missing its label or carrying an unknown key", () => {
+  assert.equal(decodeHandoff('{"v":1,"phase":"plan","opts":[{"d":"desc only"}]}'), null); // no l
+  assert.equal(decodeHandoff('{"v":1,"phase":"plan","opts":[{"l":"A","x":1}]}'), null); // unknown key
+  assert.equal(decodeHandoff('{"v":1,"phase":"plan","opts":[{"l":"A","d":5}]}'), null); // non-string d
+});
+
+test("qs options can be described choices too (nested {l,d} parses)", () => {
+  const line = `HANDOFF {"v":1,"phase":"plan","qs":[{"q":"On by default?","opts":[{"l":"Opt-in","d":"silent until enabled"},{"l":"On","d":"plays out of the box"}]}]}`;
+  const { handoff } = extractHandoffLine(line);
+  assert.deepEqual(handoff.qs[0].opts, [{ l: "Opt-in", d: "silent until enabled" }, { l: "On", d: "plays out of the box" }]);
+});
+
 test("renderHandoffLine produces exactly what extractHandoffLine reads back", () => {
   const line = renderHandoffLine({ phase: "revise", br: "agency/issue-4", round: 1 });
   assert.ok(line.startsWith("HANDOFF "));
