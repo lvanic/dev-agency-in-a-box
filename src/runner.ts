@@ -233,6 +233,9 @@ async function maybeParkRateLimited(repo: string, number: number, err: unknown, 
 }
 /** Don't re-engage closed threads older than this (keeps the scan cheap). DB-first → env → 21. */
 const followupWindowDays = (): number => sNum("followup_window_days", "FOLLOWUP_WINDOW_DAYS", 21);
+/** Flag set while a follow-up on a delivered (reopened) issue is in flight, so the closed-thread
+ *  backstop doesn't clobber it back to `done` on a stale-closed read before GitHub reports open. */
+const followupActiveKey = (repo: string, number: number): string => `followup_active.${repo}#${number}`;
 /** An in-progress issue with no live run, idle this long, is treated as an orphan. */
 let lastAttachmentFlush = 0;
 const ORPHAN_GRACE_MS = (Number(process.env.ORPHAN_GRACE_MIN?.trim()) || 12) * 60_000;
@@ -541,7 +544,14 @@ async function processFollowUp(cfg: Config, repo: string, issue: Issue, closed =
   // closed-thread backstop in scanRepo forces the card straight back to `done` on the next scan —
   // clobbering working/review, so the merge button for the follow-up fix PR never survives. Reopen
   // → board flows done→working→review; merging the fix PR re-closes it.
-  if (closed) await reopenIssue(repo, issue.number).catch(() => {});
+  // The reopen is eventually consistent: GitHub (and the agency's thread cache) can still report the
+  // issue `closed` for a scan or two, and during that window the backstop would see stale-closed +
+  // working and clobber the card back to done (flapping the board → a spurious "done" chime). Set a
+  // deterministic in-flight flag the backstop honours; scanRepo clears it once GitHub reports open.
+  if (closed) {
+    setSetting(followupActiveKey(repo, issue.number), "1");
+    await reopenIssue(repo, issue.number).catch(() => {});
+  }
   recordIssueStatus(repo, issue.number, withStatus("working"), { title: issue.title, role: "developer" });
 
   const thread = await commentThread(repo, issue.number);
@@ -1007,11 +1017,18 @@ async function scanRepo(cfg: Config, repo: string): Promise<void> {
     // GitHub carries no signal of its own (no labels, nothing read back).
     let status = getIssueStatus(repo, t.number);
 
+    // A follow-up reopened this issue but GitHub still reads `open` again → the eventual-consistency
+    // window is over; drop the in-flight flag so the backstop guards normally from here.
+    if (!t.closed && getSetting(followupActiveKey(repo, t.number))) setSetting(followupActiveKey(repo, t.number), "");
+
     // Backstop for threads finished on GitHub directly: a closed thread the agency had already
     // triaged (anything past Inbox — INCLUDING Planned, which must not survive its issue being
     // closed on GitHub) is terminal. One gh read, and only once per thread (state flips to done,
     // so the next scan skips it). The webhook does this in real time; the scan is the catch-up.
-    if (t.closed && status.state !== "notPlanned" && status.state !== "done") {
+    // EXCEPT while a follow-up is in flight: reopen is eventually consistent, so a stale-closed read
+    // here must not clobber the live working/review state back to done (which flaps the board and
+    // fires a spurious "done" chime). The flag clears above once GitHub reports open.
+    if (t.closed && status.state !== "notPlanned" && status.state !== "done" && !getSetting(followupActiveKey(repo, t.number))) {
       await prMerged(repo, `agency/issue-${t.number}`).catch(() => false); // best-effort — the change journal records the actual merge
       recordIssueStatus(repo, t.number, withStatus("done"), { title: t.title });
       status = { state: "done", blocked: null };
