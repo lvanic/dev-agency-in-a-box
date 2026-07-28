@@ -46,13 +46,26 @@ export interface Handoff {
   opts?: string[];
   /** True → `opts` is a multi-select (checkboxes + submit); false/omitted → single-pick buttons. */
   multi?: boolean;
+  /** SEVERAL clickable questions in one round (each its own prompt + options), rendered as a single
+   *  answer form above the composer. Use this instead of `q`/`opts` when asking more than one thing.
+   *  Capped, see MAX_QS. */
+  qs?: HandoffQuestion[];
 }
 
-const ALLOWED_KEYS: ReadonlySet<string> = new Set(["v", "phase", "br", "files", "test", "verdict", "round", "q", "opts", "multi"]);
+/** One question in a multi-question `qs` round: a prompt plus its own discrete answer choices. */
+export interface HandoffQuestion {
+  q: string;
+  opts?: string[];
+  multi?: boolean;
+}
+
+const ALLOWED_KEYS: ReadonlySet<string> = new Set(["v", "phase", "br", "files", "test", "verdict", "round", "q", "opts", "multi", "qs"]);
+const Q_KEYS: ReadonlySet<string> = new Set(["q", "opts", "multi"]);
 const MAX_FILES = 12;
 const MAX_Q_LEN = 240;
 const MAX_OPTS = 6;
 const MAX_OPT_LEN = 120;
+const MAX_QS = 4;
 
 /** Input to encodeHandoff/buildHandoff — every field but `phase` is optional (and dropped when empty). */
 export type HandoffInput = Partial<Omit<Handoff, "v" | "phase">> & { phase: HandoffPhase };
@@ -73,6 +86,16 @@ export function encodeHandoff(h: HandoffInput): string {
   if (h.opts && h.opts.length) {
     const opts = h.opts.map((o) => String(o).trim()).filter(Boolean).slice(0, MAX_OPTS).map((o) => o.slice(0, MAX_OPT_LEN));
     if (opts.length) { out.opts = opts; if (h.multi) out.multi = true; }
+  }
+  if (h.qs && h.qs.length) {
+    const qs = h.qs.slice(0, MAX_QS).map((q) => {
+      const qo: Record<string, unknown> = { q: String(q.q ?? "").trim().slice(0, MAX_Q_LEN) };
+      const opts = (q.opts ?? []).map((o) => String(o).trim()).filter(Boolean).slice(0, MAX_OPTS).map((o) => o.slice(0, MAX_OPT_LEN));
+      if (opts.length) qo.opts = opts;
+      if (q.multi) qo.multi = true;
+      return qo;
+    }).filter((q) => (q.q as string).length);
+    if (qs.length) out.qs = qs;
   }
   return JSON.stringify(out);
 }
@@ -130,6 +153,28 @@ export function decodeHandoff(s: string): Handoff | null {
     if (typeof o.multi !== "boolean") return null;
     if (o.multi) out.multi = true;
   }
+  if (o.qs !== undefined) {
+    if (!Array.isArray(o.qs)) return null;
+    const qs: HandoffQuestion[] = [];
+    for (const item of o.qs) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const it = item as Record<string, unknown>;
+      for (const k of Object.keys(it)) if (!Q_KEYS.has(k)) return null;
+      if (typeof it.q !== "string" || !it.q.trim()) return null;
+      const qq: HandoffQuestion = { q: it.q };
+      if (it.opts !== undefined) {
+        if (!Array.isArray(it.opts) || !it.opts.every((x) => typeof x === "string")) return null;
+        const opts = (it.opts as string[]).map((x) => x.trim()).filter(Boolean);
+        if (opts.length) qq.opts = opts;
+      }
+      if (it.multi !== undefined) {
+        if (typeof it.multi !== "boolean") return null;
+        if (it.multi) qq.multi = true;
+      }
+      qs.push(qq);
+    }
+    if (qs.length) out.qs = qs;
+  }
   return out;
 }
 
@@ -137,16 +182,42 @@ export function decodeHandoff(s: string): Handoff | null {
 export const HANDOFF_TAG = "HANDOFF";
 // Tolerant on purpose: models drift toward wrapping the line in backticks (even though the
 // instruction strings below now explicitly say not to) and toward tacking on trailing prose after
-// the JSON on the SAME line. Both must still match so the line gets stripped before any fallback
+// the JSON on the SAME line. Both must still be handled so the line gets stripped before any fallback
 // parser runs on it — see extractHandoffLine's "always strip the tagged line" contract.
 //   - `{0,3}`         optional leading backtick-fence (1-3 backticks)
-//   - (\{.*?\})        group 1: the JSON object, captured NON-GREEDILY up to its first "}" — safe
-//                       because the Handoff schema is flat (no nested {} — arrays use [], never objects)
-//   - \s*`{0,3}`       optional closing backtick-fence
-//   - (.*)$            group 2: anything trailing on the SAME line — kept (not discarded) by
-//                       extractHandoffLine below, since it's real human-facing prose, not the tag
-const LINE_RE = /^\s*`{0,3}\s*HANDOFF\s*[:\-]?\s*(\{.*?\})\s*`{0,3}(.*)$/i;
+//   - HANDOFF[:\-]?   the tag, optional colon/dash
+// The JSON object itself is matched by matchTaggedHandoff() with a BRACE-BALANCED scan (not a regex)
+// so the `qs` field's nested `{...}` objects parse correctly — a non-greedy regex would stop at the
+// first inner "}" and truncate the envelope.
+const TAG_RE = /^`{0,3}\s*HANDOFF\s*[:\-]?\s*/i;
 const FENCE_RE = /```(?:json|handoff)?\s*\n?\s*(\{[^\n`]*\})\s*\n?```/i;
+
+/** Match a HANDOFF-tagged line: the tag, then a brace-balanced JSON object (string- and escape-aware,
+ *  so braces/quotes inside string values don't fool it), then whatever prose trails on the same line.
+ *  Returns null when the line isn't a HANDOFF line or its braces never close. */
+function matchTaggedHandoff(line: string): { json: string; trailing: string } | null {
+  const m = TAG_RE.exec(line);
+  if (!m) return null;
+  const after = line.slice(m[0].length);
+  if (after[0] !== "{") return null;
+  let depth = 0, inStr = false, esc = false, end = -1;
+  for (let i = 0; i < after.length; i++) {
+    const ch = after[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) return null;
+  const json = after.slice(0, end + 1);
+  const trailing = after.slice(end + 1).replace(/^\s*`{0,3}\s*/, "").trim();
+  return { json, trailing };
+}
 
 /** Render a Handoff as the exact line a role should emit / the orchestrator embeds in a task. */
 export function renderHandoffLine(h: HandoffInput | Handoff): string {
@@ -164,7 +235,9 @@ export function renderHandoffStatus(h: Handoff): string {
   const files = h.files && h.files.length ? ` · ${h.files.length} file${h.files.length > 1 ? "s" : ""}` : "";
   switch (h.phase) {
     case "plan":
-      return h.q ? `❓ Needs your input: ${h.q}` : "📋 Plan ready for your approval.";
+      return h.q ? `❓ Needs your input: ${h.q}`
+        : h.qs && h.qs.length ? `❓ Needs your input — ${h.qs.length} question${h.qs.length > 1 ? "s" : ""}.`
+        : "📋 Plan ready for your approval.";
     case "dev":
       return `🔨 Building${h.br ? ` on \`${h.br}\`` : ""}${files}.`;
     case "test":
@@ -202,16 +275,15 @@ export function extractHandoffLine(text: string): { handoff: Handoff | null; res
     const t = lines[idx].trim();
     if (t === "") continue;
     seen++;
-    const m = LINE_RE.exec(t);
+    const m = matchTaggedHandoff(t);
     if (m) {
       // The line carries the HANDOFF tag either way — strip JUST the tag+JSON(+backticks) before
       // falling back, so a malformed envelope (bad JSON) doesn't also poison the legacy keyword/regex
       // fallback parser, which looks at the (now-clean) first remaining line. Any trailing prose the
       // model tacked on AFTER the JSON on that same line is real human-facing content — keep it
       // (as its own line) rather than discarding the whole line.
-      const trailing = (m[2] || "").trim();
-      const rest = [...lines.slice(0, idx), ...(trailing ? [trailing] : []), ...lines.slice(idx + 1)].join("\n").trim();
-      return { handoff: decodeHandoff(m[1]), rest };
+      const rest = [...lines.slice(0, idx), ...(m.trailing ? [m.trailing] : []), ...lines.slice(idx + 1)].join("\n").trim();
+      return { handoff: decodeHandoff(m.json), rest };
     }
   }
   // 2) A fenced single-line JSON block (```json {...} ```), anywhere.
@@ -278,4 +350,8 @@ export const PLANNER_HANDOFF_INSTRUCTION =
   'set `"opts"` to the list of choices (max 6, short labels), e.g. ' +
   '{"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}. ' +
   'Add `"multi":true` only when the human may pick SEVERAL choices at once (select-all-that-apply); ' +
-  "omit it for a single pick. Still write the full question in prose below the line.";
+  "omit it for a single pick. Still write the full question in prose below the line. " +
+  "To ask MORE THAN ONE question in the same round (each with its own choices), use `qs` instead of " +
+  '`q`/`opts` — a list of up to 4 questions: {"v":1,"phase":"plan","qs":[{"q":"Flutter or Expo?",' +
+  '"opts":["Flutter","Expo"]},{"q":"Ship dark mode now?","opts":["Yes","Later"]}]}. The human answers ' +
+  "all of them in one form and submits once.";

@@ -41,12 +41,17 @@ architecture, or libraries (decide those yourself, or leave them to the develope
 request is already clear enough to build, skip questions entirely. If they already answered,
 don't re-ask — proceed.
 
-Put your **single most important** question in the HANDOFF line's `q`, with its discrete choices
-in `opts`, so the human answers with one click:
-`HANDOFF {"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}`
-The `q`/`opts` is the ONE clickable question — never ask it via a tool, always via this line. If you
-genuinely need one or two more, add them as short prose lines below (they won't be clickable, so keep
-the clickable `q` the one that matters most). Prefer asking ONE crisp question over several.
+Ask with **clickable choices** so the human answers by tapping, never by typing — and never via a
+tool, always via the HANDOFF line:
+
+- ONE question → put it in `q` with its choices in `opts`:
+  `HANDOFF {"v":1,"phase":"plan","q":"Flutter or Expo?","opts":["Pivot to Flutter","Keep Expo","Something else"]}`
+- SEVERAL questions (up to 4) → use `qs`, a list where each entry has its own `q` + `opts`:
+  `HANDOFF {"v":1,"phase":"plan","qs":[{"q":"Flutter or Expo?","opts":["Flutter","Expo"]},{"q":"Ship dark mode now?","opts":["Yes","Later"]}]}`
+  The human answers them all in one form and submits once.
+
+Add `"multi":true` to a question when the human may pick several of its choices at once. Keep prompts
+and labels short. Still write the full questions in prose below the line. Prefer few, crisp questions.
 
 ### Build immediately — your DEFAULT, no approval
 For almost everything, use `phase:"dev"` with a **1–3 line gist of what will be built** (the

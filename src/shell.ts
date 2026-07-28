@@ -1337,6 +1337,19 @@ textarea{resize:vertical;min-height:64px}
 .optpick-box svg{opacity:0}
 .optpick-chk.on .optpick-box svg{opacity:1}
 .optpick-done{display:inline-flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;font-weight:600;color:var(--green)}
+/* Selected state for a click-to-toggle option button (MultiQuestionPicker collects before submit, so
+   its buttons highlight rather than fire immediately like the single-question OptionPicker). */
+.optpick-btn.on{background:var(--accent);color:#fff}
+.optpick-btn .optpick-box{width:15px;height:15px;border:1.5px solid currentColor;border-radius:4px}
+.optpick-btn.on .optpick-box{background:#fff;border-color:#fff;color:var(--accent)}
+.optpick-btn.on .optpick-box svg{opacity:1}
+/* Several clickable questions in one round (MultiQuestionPicker): each prompt + its options stacked,
+   one Submit at the end. */
+.mqpick{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+.mqpick-q{display:flex;flex-direction:column;gap:2px}
+.mqpick-prompt{font-weight:600;font-size:13px;color:var(--ink)}
+.mqpick .optpick{margin-top:6px}
+.mqpick .optpick-submit{align-self:flex-start;margin-top:2px}
 /* Frames the shared ChatComposer (same wrapper shape as .dcompose in Detail.js — that one's
    known-good). Used to be display:flex plus its own raw textarea rules from before this mounted
    ChatComposer; those non-important rules (background/border/padding, same specificity as

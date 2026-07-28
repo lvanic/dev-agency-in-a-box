@@ -198,7 +198,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
     for (let i = thread.comments.length - 1; i >= 0; i--) {
       const c = thread.comments[i];
       if (c.isAgency === false) return null; // the human already answered
-      if (c.meta && c.meta.question) return c.meta.question;
+      if (c.meta && (c.meta.questions || c.meta.question)) return { questions: c.meta.questions || null, question: c.meta.question || null };
     }
     return null;
   })();
@@ -366,7 +366,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
       ${isDesktop ? html`${chatPane}${streamPane}` : tab === "chat" ? chatPane : streamPane}
     </div>
     ${timelineModel(issue).started ? html`<div class="dtl-timeline"><${DetailTimeline} issue=${issue} data=${data} onOpenModels=${onOpenModels}/></div>` : null}
-    <${ActionDock} issue=${issue} repo=${repo} number=${number} act=${act} onClose=${onClose} question=${pendingQuestion} onPick=${sendFull}/>
+    <${ActionDock} issue=${issue} repo=${repo} number=${number} act=${act} onClose=${onClose} pending=${pendingQuestion} onPick=${sendFull}/>
     <${ComposerDock}
       reply=${reply} setReply=${setReply} taRef=${taRef} repo=${repo} number=${number}
       running=${running} busy=${busy} sendFull=${sendFull}

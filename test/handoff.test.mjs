@@ -169,6 +169,41 @@ test("extractHandoffLine does NOT treat a HANDOFF sample buried deep in prose as
   assert.equal(handoff, null);
 });
 
+test("encodeHandoff/decodeHandoff round-trip a multi-question qs round (nested objects)", () => {
+  const h = { v: 1, phase: "plan", qs: [
+    { q: "Flutter or Expo?", opts: ["Flutter", "Expo"] },
+    { q: "Ship dark mode now?", opts: ["Yes", "Later"], multi: true },
+  ] };
+  assert.deepEqual(decodeHandoff(encodeHandoff(h)), h);
+});
+
+test("extractHandoffLine parses a HANDOFF line whose qs array has nested {} (brace-aware, not truncated)", () => {
+  const line = `HANDOFF {"v":1,"phase":"plan","qs":[{"q":"A?","opts":["x","y"]},{"q":"B?","opts":["1","2"]}]}`;
+  const { handoff, rest } = extractHandoffLine(`${line}\nAsking two things.`);
+  assert.equal(handoff.qs.length, 2);
+  assert.deepEqual(handoff.qs[1], { q: "B?", opts: ["1", "2"] });
+  assert.equal(rest, "Asking two things.");
+});
+
+test("extractHandoffLine keeps trailing prose after a nested-qs JSON on the same line", () => {
+  const { handoff, rest } = extractHandoffLine(`HANDOFF {"v":1,"phase":"plan","qs":[{"q":"A?","opts":["x","y"]}]} pick one`);
+  assert.equal(handoff.qs.length, 1);
+  assert.equal(rest, "pick one");
+});
+
+test("decodeHandoff rejects a malformed qs (missing q, bad opts, or unknown key)", () => {
+  assert.equal(decodeHandoff(`{"v":1,"phase":"plan","qs":[{"opts":["a"]}]}`), null); // no q
+  assert.equal(decodeHandoff(`{"v":1,"phase":"plan","qs":[{"q":"A?","opts":[1]}]}`), null); // non-string opt
+  assert.equal(decodeHandoff(`{"v":1,"phase":"plan","qs":[{"q":"A?","x":1}]}`), null); // unknown key
+  assert.equal(decodeHandoff(`{"v":1,"phase":"plan","qs":{"q":"A?"}}`), null); // qs not an array
+});
+
+test("encodeHandoff caps qs at 4 questions", () => {
+  const qs = Array.from({ length: 7 }, (_, i) => ({ q: `Q${i}?`, opts: ["a", "b"] }));
+  const decoded = decodeHandoff(encodeHandoff({ v: 1, phase: "plan", qs }));
+  assert.equal(decoded.qs.length, 4);
+});
+
 test("renderHandoffLine produces exactly what extractHandoffLine reads back", () => {
   const line = renderHandoffLine({ phase: "revise", br: "agency/issue-4", round: 1 });
   assert.ok(line.startsWith("HANDOFF "));
