@@ -192,10 +192,17 @@ export function renderHandoffStatus(h: Handoff): string {
 export function extractHandoffLine(text: string): { handoff: Handoff | null; rest: string } {
   const src = text ?? "";
   const lines = src.split("\n");
-  let idx = 0;
-  while (idx < lines.length && lines[idx].trim() === "") idx++;
-  if (idx < lines.length) {
-    const m = LINE_RE.exec(lines[idx].trim());
+  // 1) A HANDOFF-tagged line — the unambiguous form. Scan the FIRST FEW non-blank lines, not just the
+  //    first: models sometimes lead with a markdown header ("**A few questions**") or a sentence
+  //    before the machine line, which used to force a needless fallback + "missing HANDOFF" warning.
+  //    Bounded (SCAN) so a `HANDOFF {...}` sample buried deep in prose can't be mistaken for the line.
+  const SCAN = 6;
+  let seen = 0;
+  for (let idx = 0; idx < lines.length && seen < SCAN; idx++) {
+    const t = lines[idx].trim();
+    if (t === "") continue;
+    seen++;
+    const m = LINE_RE.exec(t);
     if (m) {
       // The line carries the HANDOFF tag either way — strip JUST the tag+JSON(+backticks) before
       // falling back, so a malformed envelope (bad JSON) doesn't also poison the legacy keyword/regex
@@ -204,14 +211,25 @@ export function extractHandoffLine(text: string): { handoff: Handoff | null; res
       // (as its own line) rather than discarding the whole line.
       const trailing = (m[2] || "").trim();
       const rest = [...lines.slice(0, idx), ...(trailing ? [trailing] : []), ...lines.slice(idx + 1)].join("\n").trim();
-      const h = decodeHandoff(m[1]);
-      return { handoff: h, rest };
+      return { handoff: decodeHandoff(m[1]), rest };
     }
   }
+  // 2) A fenced single-line JSON block (```json {...} ```), anywhere.
   const fm = FENCE_RE.exec(src);
   if (fm) {
     const h = decodeHandoff(fm[1]);
     if (h) return { handoff: h, rest: src.replace(fm[0], "").trim() };
+  }
+  // 3) Last resort: a bare JSON envelope (no HANDOFF tag, no fence) on the FIRST non-blank line —
+  //    accepted only when it actually decodes to a valid Handoff, else it stays as plain prose.
+  let fi = 0;
+  while (fi < lines.length && lines[fi].trim() === "") fi++;
+  if (fi < lines.length) {
+    const t = lines[fi].trim();
+    if (t.startsWith("{") && /"phase"\s*:/.test(t)) {
+      const h = decodeHandoff(t);
+      if (h) return { handoff: h, rest: [...lines.slice(0, fi), ...lines.slice(fi + 1)].join("\n").trim() };
+    }
   }
   return { handoff: null, rest: src.trim() };
 }

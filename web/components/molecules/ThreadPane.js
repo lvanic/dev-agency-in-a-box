@@ -9,7 +9,7 @@ import { EpicChecklist } from "./EpicChecklist.js";
 
 export function ThreadPane({
   issue, repo, number, act, data, onOpenIssue, onClose, onOpenModels,
-  thread, loadThread, editComment, pendingComments, onPick,
+  thread, loadThread, editComment, pendingComments,
   chatRef, onChatScroll, chatAtTop, chatAtBottom,
   running, review, pr, conflict, conflictFiles, armed, confirmAct,
 }) {
@@ -27,13 +27,9 @@ export function ThreadPane({
     </div>`;
   })() : null;
 
-  // Plan waiting on you: an inline Approve button (mirrors the PR bar's inline Merge) so the action
-  // is one click, right where the plan is — not buried in the top toolbar. Reply below to change it.
-  const approveBar = issue.blocked === "awaitingApproval" ? html`<div class="approvebar">
-    <span class="approvebar__l"><${Icon} name="check" size=${15}/> <span>Plan ready for you<small>Approve to build it, or reply below to change it.</small></span></span>
-    <button class=${"btn green" + (bz("approve") ? " busy" : "")} disabled=${bz("approve")} onClick=${() => act.approve(repo, number).then(onClose)}>${bz("approve") ? html`<${Spinner} size=${14}/> Approving…` : html`<${Icon} name="check" size=${14}/> Approve & build`}</button>
-  </div>` : null;
-
+  // The "Approve & build" bar and clickable question choices now live in the pinned ActionDock, right
+  // above the composer (organisms/Detail.js) — not at the top of this scrolling thread. The plain
+  // question/plan prose still renders inline below as conversation history.
   const conflictBox = conflict ? html`<div class="conflictbox">
     <div class="conflictbox-h"><${Icon} name="merge" size=${15}/> Merge conflicts with main</div>
     <div class="conflictbox-b">This PR can't be merged until the conflicts are resolved.${conflictFiles.length ? html` ${conflictFiles.length} conflicting file${conflictFiles.length > 1 ? "s" : ""}:` : ""}</div>
@@ -44,7 +40,6 @@ export function ThreadPane({
   return html`<div class="dpane chat" ref=${chatRef} onScroll=${onChatScroll}>
     ${!chatAtTop ? html`<div class="scroll-fab-wrap top"><button class="iconbtn scroll-fab" title="Scroll to top" onClick=${() => { chatRef.current.scrollTop = 0; }}><${Icon} name="chevup" size=${16}/></button></div>` : null}
     ${issue.epic ? html`<${EpicChecklist} epic=${{ ...issue.epic, parent: number }} repo=${repo} onOpen=${onOpenIssue} onClose=${() => act.close(repo, number).then(onClose)} closing=${act.isBusy("close", repo, number)} act=${act} data=${data} onOpenModels=${onOpenModels}/>` : null}
-    ${approveBar}
     ${conflictBox}
     ${issue.blocked === "held" ? html`<div class="heldbar">
       <span class="heldbar__l"><${Icon} name="clock" size=${15}/> Workflow on hold${(issue.steers && issue.steers.length) ? html` · ${issue.steers.length} steer${issue.steers.length > 1 ? "s" : ""} queued` : ""}</span>
@@ -69,12 +64,10 @@ export function ThreadPane({
             // If exactly one agent replied, editing must halt that agent. If >1, no edit — only stop.
             const onEditFn = editable ? editComment : null;
             const onStop = (isLastHuman && agentsAfter >= 1 && running) ? (() => act.stop(repo, number)) : null;
-            // Clickable answer choices (agent asked a question): active only on the LAST comment while
-            // the run is paused waiting — picking sends the choice as a normal reply.
-            const question = (c.meta && c.meta.question) || null;
-            const pickActive = n === cs.length - 1 && !running;
-            // editable+1-agent: saving the edit should also halt that one agent so it re-reads the edit.
-            return html`<${Comment} key=${c.localId || c.id || c.createdAt} id=${c.id} author=${c.author} createdAt=${c.createdAt} body=${c.body} isAgency=${c.isAgency} incoming=${c.incoming} avatars=${(data && data.config && data.config.avatars) !== "off"} onEdit=${onEditFn} editable=${editable} agentsAfter=${isLastHuman ? agentsAfter : 0} onStopAgent=${onStop} question=${question} onPick=${onPick} pickActive=${pickActive}/>`;
+            // The clickable answer choices moved to the pinned ActionDock above the composer; the
+            // comment here shows only the question prose (history). editable+1-agent: saving the edit
+            // also halts that one agent so it re-reads the edit.
+            return html`<${Comment} key=${c.localId || c.id || c.createdAt} id=${c.id} author=${c.author} createdAt=${c.createdAt} body=${c.body} isAgency=${c.isAgency} incoming=${c.incoming} avatars=${(data && data.config && data.config.avatars) !== "off"} onEdit=${onEditFn} editable=${editable} agentsAfter=${isLastHuman ? agentsAfter : 0} onStopAgent=${onStop}/>`;
           });
         })()}
         ${pendingComments.map((p) => html`<${Comment} key=${"skel-" + p.id} author=${p.author} createdAt=${p.createdAt} body=${p.body} isAgency=${false} isSkel=${true}/>`)}

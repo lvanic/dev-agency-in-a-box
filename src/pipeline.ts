@@ -205,8 +205,7 @@ function shiftTier(t: Tier, dir: 1 | -1): Tier {
 }
 
 /** Honor decideNext()'s P3 modelHint for the NEXT revise run: resolves one tier up/down from the
- *  developer role's base tier and logs the rationale as a `model_decision` run_msg (same shape
- *  roleAgent.ts's per-run decision line uses). Returns the tier keyword to pass as `runRole`'s
+ *  developer role's base tier. Returns the tier keyword to pass as `runRole`'s
  *  `model` — which only ever WINS when no explicit per-issue/per-agent override exists (roleAgent's
  *  resolution checks those first), so this never overrides a deliberate user pick. Returns undefined
  *  for "same" (or a "escalate"/"downshift" that's already pinned at the tier ceiling/floor) — the
@@ -217,11 +216,8 @@ function applyModelHint(repo: string, number: number, hint: ModelHint | undefine
   const base = roleTier(ROLES.developer);
   const target = shiftTier(base, hint === "escalate" ? 1 : -1);
   if (target === base) return undefined;
-  const reason = hint === "escalate" ? "escalating after 2 failed review rounds" : "downshifting — last ask was a trivial, single-file fix";
-  const runId = currentRunId(repo, number);
-  const line = `model_hint=${hint} role=developer tier=${target} reason="${reason}"`;
-  const id = appendRunMsg(repo, number, runId, "developer", "model_decision", line, { hint, tier: target });
-  pushRunMsg(id, repo, number, runId, "developer", `${renderBadge("developer")}\n\n${line}`);
+  // The tier shift still applies; its rationale is no longer echoed into the conversation (that
+  // "model_hint=… reason=…" line was dashboard noise the human never needed).
   return target;
 }
 

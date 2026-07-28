@@ -27,6 +27,8 @@ export interface LlmRunOptions {
   authKind: "subscription" | "apiKey";
   /** Allowed tools (SDK runners) / ignored by CLI runners. */
   allowedTools: string[];
+  /** Tool names to explicitly block (SDK runners) — e.g. headless roles must not reach AskUserQuestion. */
+  disallowedTools?: string[];
   /** MCP servers (SDK runners). */
   mcpServers?: Record<string, unknown>;
   /** Base env (process env + GH_TOKEN/GIT identity); the runner layers provider auth on top. */
@@ -66,6 +68,7 @@ export async function runLLM(opts: LlmRunOptions, emitAssistant: (message: unkno
     cwd: opts.cwd,
     model: opts.model,
     allowedTools: opts.allowedTools,
+    disallowedTools: opts.disallowedTools,
     mcpServers: opts.mcpServers,
     provider: opts.provider,
     authKind: opts.authKind,

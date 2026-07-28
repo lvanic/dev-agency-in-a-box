@@ -118,6 +118,7 @@ export class ClaudeSdkRunner implements AgentRunner {
           systemPrompt: req.systemPrompt,
           model: req.model,
           allowedTools: req.allowedTools,
+          ...(req.disallowedTools && req.disallowedTools.length ? { disallowedTools: req.disallowedTools } : {}),
           mcpServers: (req.mcpServers ?? {}) as never,
           env,
           ...(resumeId ? { resume: resumeId } : {}),

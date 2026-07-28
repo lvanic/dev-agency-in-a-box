@@ -146,6 +146,29 @@ test("extractHandoffLine returns null on a malformed HANDOFF line (never throws,
   assert.equal(rest, "prose");
 });
 
+test("extractHandoffLine finds a HANDOFF line even when the model leads with a markdown header (no needless fallback)", () => {
+  // Real drift the planner showed: a bold header before the machine line → used to force the
+  // "missing HANDOFF" fallback + warning. The tag is now scanned across the first few non-blank lines.
+  const text = `**A few questions before I plan**\n\nHANDOFF {"v":1,"phase":"plan","q":"Flutter or Expo?"}\n\nWhich one?`;
+  const { handoff, rest } = extractHandoffLine(text);
+  assert.deepEqual(handoff, { v: 1, phase: "plan", q: "Flutter or Expo?" });
+  assert.ok(!/HANDOFF/.test(rest));
+  assert.ok(/A few questions/.test(rest) && /Which one/.test(rest));
+});
+
+test("extractHandoffLine accepts a bare leading JSON envelope with no HANDOFF tag", () => {
+  const text = `{"v":1,"phase":"dev"}\nMake the cards tappable.`;
+  const { handoff, rest } = extractHandoffLine(text);
+  assert.deepEqual(handoff, { v: 1, phase: "dev" });
+  assert.equal(rest, "Make the cards tappable.");
+});
+
+test("extractHandoffLine does NOT treat a HANDOFF sample buried deep in prose as the line", () => {
+  const text = `line1\nline2\nline3\nline4\nline5\nline6\nHANDOFF {"v":1,"phase":"dev"}`;
+  const { handoff } = extractHandoffLine(text);
+  assert.equal(handoff, null);
+});
+
 test("renderHandoffLine produces exactly what extractHandoffLine reads back", () => {
   const line = renderHandoffLine({ phase: "revise", br: "agency/issue-4", round: 1 });
   assert.ok(line.startsWith("HANDOFF "));

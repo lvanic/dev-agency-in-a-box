@@ -30,6 +30,12 @@ export interface RunRequest {
   model: string;
   /** Allowed tool names (SDK runners) or ignored (CLI runners — the CLI picks its own tools). */
   allowedTools: string[];
+  /**
+   * Tool names to explicitly block (SDK runners). Role runs are headless, so interactive tools like
+   * `AskUserQuestion` must never be reachable — an agent that calls one instead of emitting its
+   * structured HANDOFF line produces a reply with no machine line (the "missing HANDOFF" fallback).
+   */
+  disallowedTools?: string[];
   /** MCP servers (SDK runners only). */
   mcpServers?: Record<string, unknown>;
   /**

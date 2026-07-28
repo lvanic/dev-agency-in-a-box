@@ -15,6 +15,7 @@ import { RunHeader } from "../molecules/RunHeader.js";
 import { ThreadPane } from "../molecules/ThreadPane.js";
 import { StreamPane } from "../molecules/StreamPane.js";
 import { ComposerDock } from "../molecules/ComposerDock.js";
+import { ActionDock } from "../molecules/ActionDock.js";
 import { DetailTimeline } from "../molecules/DetailTimeline.js";
 import { timelineModel } from "../molecules/Timeline.js";
 import { api, getJSON } from "../../lib/api.js";
@@ -188,6 +189,10 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   const done = isDone(issue);
   const st = issue.state || "";
   const running = !!(issue.running || issue.active || issue.queued); // a Claude run is executing right now
+  // The newest comment may carry clickable answer choices (an agent asked a question). Surface them in
+  // the pinned ActionDock above the composer, but only while the run is paused waiting on the human.
+  const lastComment = thread && Array.isArray(thread.comments) && thread.comments.length ? thread.comments[thread.comments.length - 1] : null;
+  const pendingQuestion = (!running && lastComment && lastComment.meta && lastComment.meta.question) ? lastComment.meta.question : null;
 
   // Send the composed reply (the shared ChatComposer already folded attachment markdown into
   // `full`). The chosen agent travels as a STRUCTURED field — never an "@handle " text prefix.
@@ -335,7 +340,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   const chatPane = html`<${ThreadPane}
     issue=${issue} repo=${repo} number=${number} act=${act} data=${data}
     onOpenIssue=${onOpenIssue} onClose=${onClose} onOpenModels=${onOpenModels}
-    thread=${thread} loadThread=${loadThread} editComment=${editComment} pendingComments=${pendingComments} onPick=${sendFull}
+    thread=${thread} loadThread=${loadThread} editComment=${editComment} pendingComments=${pendingComments}
     chatRef=${chatRef} onChatScroll=${onChatScroll} chatAtTop=${chatAtTop} chatAtBottom=${chatAtBottom}
     running=${running} review=${review} pr=${pr} conflict=${conflict} conflictFiles=${conflictFiles}
     armed=${armed} confirmAct=${confirmAct}
@@ -352,6 +357,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
       ${isDesktop ? html`${chatPane}${streamPane}` : tab === "chat" ? chatPane : streamPane}
     </div>
     ${timelineModel(issue).started ? html`<div class="dtl-timeline"><${DetailTimeline} issue=${issue} data=${data} onOpenModels=${onOpenModels}/></div>` : null}
+    <${ActionDock} issue=${issue} repo=${repo} number=${number} act=${act} onClose=${onClose} question=${pendingQuestion} onPick=${sendFull}/>
     <${ComposerDock}
       reply=${reply} setReply=${setReply} taRef=${taRef} repo=${repo} number=${number}
       running=${running} busy=${busy} sendFull=${sendFull}

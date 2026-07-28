@@ -12,11 +12,11 @@ import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
 import { ROLES, modelFor, canonicalModel, roleTier, selectPlaybooks, effortFor, type RoleName } from "./roles.js";
 import { tierModel, getIssueProvider, getIssueAgentModels, parseModelRef, fallbackFor, getIssueUseFallback, type Tier, type Provider } from "../db/providers.js";
-import { resolveTierModel, priceFor } from "./pricing.js";
+import { resolveTierModel } from "./pricing.js";
 import { loadConstitution, loadPersona, loadPlaybooks } from "../memory.js";
 import { vaultSlice } from "../vault.js";
-import { pushActivity, getActive, pushRunMsg } from "../activity.js";
-import { recentLessons, recordTokens, recordRunStep, getProviders, getRoleModels, getSessionFallback, setSession, getIssueModelOverride, getGlobalModel, addIssueFiles, getFallbackChain, setRateLimited, isProviderRateLimited, appendRunMsg, renderBadge } from "../store.js";
+import { pushActivity } from "../activity.js";
+import { recentLessons, recordTokens, recordRunStep, getProviders, getRoleModels, getSessionFallback, setSession, getIssueModelOverride, getGlobalModel, addIssueFiles, getFallbackChain, setRateLimited, isProviderRateLimited } from "../store.js";
 import { parseRateLimit, RateLimitedError } from "../ratelimit.js";
 import { addClaimFiles } from "../locks.js";
 import { coordinationContext } from "../coordination.js";
@@ -29,6 +29,11 @@ import { noreplyEmail } from "../github-oauth.js";
 import { providerAuth } from "./provider-auth.js";
 import { registerRun, isStopRequested, takeSteer } from "../abort.js";
 import { runHooks } from "../hooks.js";
+
+/** Interactive tools that make no sense in a headless role run and, worse, let an agent sidestep the
+ *  structured HANDOFF envelope (AskUserQuestion asks the "human" directly, so the reply carries no
+ *  machine line → the "missing HANDOFF" fallback). Blocked for every role; roles ask via HANDOFF `q`. */
+const HEADLESS_BLOCKED_TOOLS = ["AskUserQuestion", "ExitPlanMode"];
 
 /**
  * Per-role model routing. Checks (in order):
@@ -148,58 +153,9 @@ function resolveRoute(role: RoleName, repo: string, issueNumber: number, explici
   return { model: assignment.model, provider: p!, authKind };
 }
 
-/** Best-effort "which run is this" tag — mirrors pipeline.ts's currentRunId() (kept duplicated, not
- *  imported: pipeline.ts imports runRole from here, so the reverse import would cycle). Groups this
- *  decision line under the same run_id every say()/sayAs() message from this press-Start/Resume
- *  uses, so the run-thread reads as one coherent run. */
-function currentRunId(repo: string, number: number): string {
-  const w = getActive().find((a) => a.repo === repo && a.number === number);
-  return w ? String(w.since) : `adhoc-${Date.now()}`;
-}
-
-/** Human-ish (but still terse/machine-shaped) reason for the model_decision line, from the decision
- *  info resolveAssignment left behind (see ModelDecisionInfo) plus the model actually resolved. */
-function describeDecision(info: ModelDecisionInfo | null, model: string): string {
-  if (!info) return "no model configured — Claude subscription default";
-  switch (info.source) {
-    case "issue-override":
-      return "explicit per-issue model pick — chatbox/new-issue picker";
-    case "agent-override":
-      return "explicit per-agent override for this issue";
-    case "explicit-ref":
-      return "explicit model ref (workflow step)";
-    case "role-model":
-      return "explicit per-role assignment (Settings → Models)";
-    case "global-model":
-      return "explicit global default (Settings → Models)";
-    case "session-fallback":
-      return "session fallback after a rate limit";
-    case "tier": {
-      if (info.costAware) {
-        const price = priceFor(model);
-        const priceStr = price ? `$${price.out}/M out` : "unpriced";
-        return `cheapest capable (${priceStr}); fresh issue, no override`;
-      }
-      return `no priced alternative in tier — using the pinned ${info.tier ?? ""} model; fresh issue, no override`;
-    }
-    default:
-      return "no explicit model configured — using the default";
-  }
-}
-
-/**
- * P3 (prime-time-plan): log the model-selection rationale as the FIRST run_msg of this role's run —
- * appended (and broadcast live) exactly like say()/sayAs() do, so the Detail run-thread panel shows
- * it inline with the conversation, badge-prefixed by role, without any UI change.
- */
-function logModelDecision(repo: string, issueNumber: number, role: RoleName, model: string, info: ModelDecisionInfo | null): void {
-  const tier = info?.tier ?? roleTier(ROLES[role]);
-  const reason = describeDecision(info, model);
-  const line = `model=${model} role=${role} tier=${tier} reason="${reason}"`;
-  const runId = currentRunId(repo, issueNumber);
-  const id = appendRunMsg(repo, issueNumber, runId, role, "model_decision", line, { model, role, tier, source: info?.source ?? "none" });
-  pushRunMsg(id, repo, issueNumber, runId, role, `${renderBadge(role)}\n\n${line}`);
-}
+// The per-run model-selection rationale (the "model=… role=… tier=… reason=…" line) is no longer
+// surfaced in the conversation — it was dashboard noise the human never needed. `resolveAssignment`
+// still records its decision in `lastDecision` for any future non-user-facing telemetry.
 
 // summarizeTool now lives in src/runners/registry.ts (the one shared copy — issue #61).
 
@@ -426,9 +382,6 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
   pushActivity(repo, issueNumber, role, "start", `started (${model}${input.resumeSessionId ? ", resuming" : ""})`);
 
   const assignment = resolveAssignment(role, repo, issueNumber, input.model, agentKey);
-  // P3 (prime-time-plan): log the selection rationale as the FIRST run_msg of this run — reads
-  // `lastDecision`, the side channel the resolveAssignment() call just above left behind.
-  logModelDecision(repo, issueNumber, role, model, lastDecision);
   const provider = assignment?.providerId ? getProviders().find((x) => x.id === assignment.providerId) : null;
   // Only name "Claude" when a Claude credential actually exists (saved or env). Never invent a
   // phantom provider/endpoint when nothing is configured — that was the hardcoded-Claude leak.
@@ -485,6 +438,10 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
         provider: route?.provider ?? null,
         authKind: route?.authKind ?? "subscription",
         allowedTools: [...(customTools ?? def.tools), ...(gn?.tools ?? []), ...rc.tools, ...vt.tools],
+        // Role runs are fully headless: block the interactive tools an agent might otherwise reach for
+        // instead of its structured HANDOFF line. AskUserQuestion in particular produced a reply with
+        // no machine line → the "missing HANDOFF" fallback + warning. Roles ask via the HANDOFF `q`.
+        disallowedTools: HEADLESS_BLOCKED_TOOLS,
         mcpServers: { ...(gn?.servers ?? {}), ...rc.servers, ...vt.servers },
         env: runEnv,
         systemPrompt: systemPromptFinal,

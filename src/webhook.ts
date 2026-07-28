@@ -1039,7 +1039,9 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         const repo = q.get("repo") ?? "";
         const number = Number(q.get("number"));
         if (!repo || !number) return void res.writeHead(400).end("{}");
-        const runRows = listRunThread(repo, number, 300);
+        // `model_decision` rows are internal telemetry (the old "model=… tier=… reason=…" line) —
+        // never surface them in the human conversation.
+        const runRows = listRunThread(repo, number, 300).filter((r) => r.kind !== "model_decision");
         const firstRunTs = runRows[0]?.createdAt;
         // Non-agency rows (human replies + inbound GitHub comments) always come from local_comment —
         // run_msg only ever carries agent messages. Agency-sourced local_comment rows are normally
