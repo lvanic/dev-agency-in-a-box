@@ -1,19 +1,48 @@
-// ThreadPane molecule — the Detail drawer's "Chat" pane: epic checklist, held/conflict banners, the
-// conversation thread (GitHub-backed or run-thread), and the PR status bar.
-// Extracted from organisms/Detail.js (P6 split); logic unchanged.
+// ThreadPane molecule — the Detail drawer's conversation pane: held/conflict banners, the thread
+// (GitHub-backed or run-thread), the live agent activity (folded into the agent's answer block —
+// see ActivityLog), and the PR status bar. The epic sub-issue checklist moved OUT of this scrolling
+// pane — Detail renders it full-width above the conversation so it can't scroll out of reach.
 import { html } from "/web/vendor/standalone.mjs";
 import { Icon } from "../atoms/Icon.js";
 import { Spinner } from "../atoms/Spinner.js";
+import { Avatar } from "../atoms/Avatar.js";
 import { Comment } from "./Comment.js";
-import { EpicChecklist } from "./EpicChecklist.js";
+import { ActivityLog } from "./ActivityLog.js";
+import { ROLE_EMOJI } from "../../data/logos.js";
 
 export function ThreadPane({
   issue, repo, number, act, data, onOpenIssue, onClose, onOpenModels,
   thread, loadThread, editComment, pendingComments,
   chatRef, onChatScroll, chatAtTop, chatAtBottom,
   running, review, pr, conflict, conflictFiles, armed, confirmAct,
+  stream, startError, streamRef, streamAtBottom, onStreamScroll,
 }) {
   const bz = (a) => act.isBusy(a, repo, number);
+  const avatarsOn = (data && data.config && data.config.avatars) !== "off";
+
+  // The live stream, folded inside the conversation. While a run executes it rides in its own
+  // "working…" agent block at the thread's end; once finished it attaches to the agent's answer.
+  const evs = stream || [];
+  const hasAct = evs.length > 0 || running || Boolean(startError);
+  const actLog = hasAct ? html`<${ActivityLog} stream=${evs} running=${running} startError=${startError} streamRef=${streamRef} streamAtBottom=${streamAtBottom} onScroll=${onStreamScroll}/>` : null;
+  // Who's working right now — the newest stream event that names a role.
+  const liveRole = (() => { for (let i = evs.length - 1; i >= 0; i--) if (evs[i].role) return evs[i].role; return null; })();
+  const liveBlock = running && actLog ? html`<div class="cmt ag live">
+    <div class="h">
+      ${avatarsOn ? html`<span class="cmt-av"><${Avatar} role=${liveRole || "developer"} size=${28} crop="head"/></span>` : null}
+      <span>${liveRole ? html`<span class="cmt-role">${ROLE_EMOJI[liveRole] || "🤖"} ${liveRole[0].toUpperCase() + liveRole.slice(1)}</span> · ` : ""}working…</span>
+      <${Spinner} size=${13}/>
+    </div>
+    ${actLog}
+  </div>` : null;
+
+  // Audit entries have no GitHub thread/PR — they're a pure activity view.
+  if (issue._audit) {
+    return html`<div class="dpane chat" ref=${chatRef} onScroll=${onChatScroll}>
+      <div class="sec">Live activity</div>
+      <${ActivityLog} stream=${evs} running=${running} startError=${startError} streamRef=${streamRef} streamAtBottom=${streamAtBottom} onScroll=${onStreamScroll} defaultOpen=${true}/>
+    </div>`;
+  }
 
   const prBar = issue.pr_url ? (() => {
     const ma = armed === "merge", mb = bz("merge");
@@ -39,7 +68,6 @@ export function ThreadPane({
 
   return html`<div class="dpane chat" ref=${chatRef} onScroll=${onChatScroll}>
     ${!chatAtTop ? html`<div class="scroll-fab-wrap top"><button class="iconbtn scroll-fab" title="Scroll to top" onClick=${() => { chatRef.current.scrollTop = 0; }}><${Icon} name="chevup" size=${16}/></button></div>` : null}
-    ${issue.epic ? html`<${EpicChecklist} epic=${{ ...issue.epic, parent: number }} repo=${repo} onOpen=${onOpenIssue} onClose=${() => act.close(repo, number).then(onClose)} closing=${act.isBusy("close", repo, number)} act=${act} data=${data} onOpenModels=${onOpenModels}/>` : null}
     ${conflictBox}
     ${issue.blocked === "held" ? html`<div class="heldbar">
       <span class="heldbar__l"><${Icon} name="clock" size=${15}/> Workflow on hold${(issue.steers && issue.steers.length) ? html` · ${issue.steers.length} steer${issue.steers.length > 1 ? "s" : ""} queued` : ""}</span>
@@ -57,7 +85,13 @@ export function ThreadPane({
           for (let n = 0; n < cs.length; n++) if (!cs[n].isAgency) lastHumanIdx = n;
           // How many agent comments follow that last human comment.
           const agentsAfter = lastHumanIdx >= 0 ? cs.slice(lastHumanIdx + 1).filter((x) => x.isAgency).length : 0;
-          return cs.map((c, n) => {
+          // The newest agency comment carries the finished run's activity log (folded) — the stream
+          // reads as part of THAT answer. While a run executes, the log rides in liveBlock instead.
+          let lastAgencyIdx = -1;
+          for (let n = 0; n < cs.length; n++) if (cs[n].isAgency) lastAgencyIdx = n;
+          // No agent answer to attach to (e.g. a failed start) → the log stands alone at the end.
+          const orphanLog = !running && lastAgencyIdx < 0 && actLog ? actLog : null;
+          return html`${cs.map((c, n) => {
             const isLastHuman = n === lastHumanIdx;
             // Editable only on the last human comment, and only while ≤1 agent has replied after it.
             const editable = isLastHuman && agentsAfter <= 1;
@@ -67,10 +101,11 @@ export function ThreadPane({
             // The clickable answer choices moved to the pinned ActionDock above the composer; the
             // comment here shows only the question prose (history). editable+1-agent: saving the edit
             // also halts that one agent so it re-reads the edit.
-            return html`<${Comment} key=${c.localId || c.id || c.createdAt} id=${c.id} author=${c.author} createdAt=${c.createdAt} body=${c.body} isAgency=${c.isAgency} incoming=${c.incoming} avatars=${(data && data.config && data.config.avatars) !== "off"} onEdit=${onEditFn} editable=${editable} agentsAfter=${isLastHuman ? agentsAfter : 0} onStopAgent=${onStop}/>`;
-          });
+            return html`<${Comment} key=${c.localId || c.id || c.createdAt} id=${c.id} author=${c.author} createdAt=${c.createdAt} body=${c.body} isAgency=${c.isAgency} incoming=${c.incoming} avatars=${avatarsOn} onEdit=${onEditFn} editable=${editable} agentsAfter=${isLastHuman ? agentsAfter : 0} onStopAgent=${onStop} activity=${!running && n === lastAgencyIdx && evs.length ? actLog : null}/>`;
+          })}${orphanLog}`;
         })()}
         ${pendingComments.map((p) => html`<${Comment} key=${"skel-" + p.id} author=${p.author} createdAt=${p.createdAt} body=${p.body} isAgency=${false} isSkel=${true}/>`)}
+        ${liveBlock}
       </div>`}
     ${!chatAtBottom ? html`<div class="scroll-fab-wrap"><button class="iconbtn scroll-fab" title="Scroll to bottom" onClick=${() => { chatRef.current.scrollTop = chatRef.current.scrollHeight; }}><${Icon} name="chevdown" size=${16}/></button></div>` : null}
     ${prBar}

@@ -589,13 +589,41 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .dpanes{flex:1;min-height:0;display:flex;flex-direction:row;overflow:hidden}
 .dpane{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
 .dpane.chat{flex:1 1 auto}
-.dpane.side{flex:0 0 44%;max-width:520px;border-left:1px solid var(--line);background:var(--bg)}
-.epicbox{border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;background:var(--surface)}
-.epicbox-h,.epicbox__h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+/* ── Epic sub-issues: a full-width section between the toolbar and the conversation — never inside
+   the chat scroll, so it can't disappear when the thread sits at its end. Foldable to one line. ── */
+.epicsec{flex:none;border-bottom:1px solid var(--line);background:var(--surface);padding:7px 16px 9px}
+.epicsec-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap;min-height:30px;cursor:pointer;user-select:none;color:var(--ink-2)}
+.epicsec-t{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3)}
+.epicsec-n{font:600 12px var(--font-mono);color:var(--ink-2)}
+.epicprog{flex:0 1 90px;min-width:36px;height:5px;border-radius:var(--radius-pill);background:var(--surface-2);overflow:hidden}
+.epicprog-fill{display:block;height:100%;background:var(--green);border-radius:var(--radius-pill);transition:width .25s ease}
+.epicsec-act{margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.epicsec-act .btn{height:26px;padding:0 10px;font-size:12px}
+.epicsec .epiclist{margin-top:4px;max-height:216px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.epicrow-w{display:flex;align-items:center;gap:6px;min-width:0}
 .epicrow,.epicck{display:flex;align-items:center;gap:8px;padding:5px 2px;font-size:13px;cursor:pointer;border-radius:var(--radius-xs)}
+.epicrow{flex:1;min-width:0;border:none;background:transparent;color:var(--ink-1);text-align:left;font-family:inherit}
 .epicrow:hover{background:var(--surface-2)}
+.epicck{flex:0 0 auto;padding:0;color:var(--ink-3)}
+.epicck.done{color:var(--green)}
+.epicrow .substate{margin-left:auto}
 .epicnum{font-family:var(--font-mono);color:var(--ink-3)}
 .epictitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@container detailpane (max-width: 560px){
+  .epicsec{padding:6px 12px 8px}
+  .epicsec .epiclist{max-height:160px}
+  .epicprog{display:none}
+}
+/* ── ActivityLog: the live stream folded inside the agent's answer block ── */
+.actlog{margin-top:9px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--bg);overflow:hidden}
+.actlog-h{display:flex;align-items:center;gap:7px;width:100%;min-width:0;border:none;background:transparent;color:var(--ink-2);font:500 12px var(--font-sans);padding:6px 9px;cursor:pointer;text-align:left}
+.actlog-h:hover{background:var(--surface-2);color:var(--ink-1)}
+.actlog-t{flex:0 0 auto;font-weight:600}
+.actlog-last{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3);font:11px/1.5 var(--font-mono)}
+.actlog-b .secbanner{margin:8px 9px 0}
+.actlog-b .setupbar{margin:8px 9px 4px}
+.actlog .dstream{border-radius:0;max-height:300px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.cmt.live .h .spin{margin-left:auto}
 
 .prbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--green);background:var(--green-weak);border-radius:var(--radius);padding:10px 13px}
 .prbar-l,.prbar__l{display:inline-flex;align-items:center;gap:7px;font-weight:600;font-size:13.5px;color:var(--green);margin-right:auto}
@@ -986,9 +1014,7 @@ textarea{resize:vertical;min-height:64px}
 }
 @media(max-width:879px){
   .detail{left:0;right:0;width:100vw;box-shadow:none}
-  .dpanes{flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
-  .dpane{padding:12px 14px;overflow:visible;flex:0 0 auto}
-  .dpane.side{flex:1;max-width:none;border-left:none;border-top:1px solid var(--line)}
+  .dpane{padding:12px 14px}
   .board-cols,.board.group-repo{grid-template-columns:1fr 1fr}
 }
 .norepo{padding:48px 20px;display:flex;flex-direction:column;align-items:center;text-align:center}
