@@ -1,8 +1,9 @@
 // Organism — Detail. Extracted from web/detail.js; logic unchanged. Split further in P6 into
-// molecules with clear seams: RunHeader (title/toolbar/tabs), ThreadPane (conversation), StreamPane
-// (live activity), ComposerDock (reply box), DetailTimeline (workflow step timeline), EpicChecklist
-// and RunApp — this file keeps the STATE and business logic (thread loading, toolbar action-button
-// construction, SSE-driven live updates) and composes those molecules for the render.
+// molecules with clear seams: RunHeader (title/toolbar), EpicChecklist (full-width sub-issue
+// section above the conversation), ThreadPane (conversation + folded ActivityLog live stream),
+// ComposerDock (reply box), DetailTimeline (workflow step timeline) and RunApp — this file keeps
+// the STATE and business logic (thread loading, toolbar action-button construction, SSE-driven
+// live updates) and composes those molecules for the render.
 //
 // The issue detail pane: conversation thread, live activity stream, toolbar actions, per-step
 // model pickers on the timeline, and the new-issue composer (now organisms/IssueComposer.js).
@@ -13,7 +14,7 @@ import { ProviderLogo } from "../atoms/ProviderLogo.js";
 import { RunApp } from "../molecules/RunApp.js";
 import { RunHeader } from "../molecules/RunHeader.js";
 import { ThreadPane } from "../molecules/ThreadPane.js";
-import { StreamPane } from "../molecules/StreamPane.js";
+import { EpicChecklist } from "../molecules/EpicChecklist.js";
 import { ComposerDock } from "../molecules/ComposerDock.js";
 import { ActionDock } from "../molecules/ActionDock.js";
 import { DetailTimeline } from "../molecules/DetailTimeline.js";
@@ -26,7 +27,6 @@ import { agentOnlyOptions } from "../../lib/agent-options.js";
 
 // ---------- Detail ----------
 export function Detail({ issue, activity, act, isDesktop, startError, onClose, onOpenIssue, data, isOnline = true, onQueueComment, docked = false, onOpenModels }) {
-  const [tab, setTab] = useState("chat"); // mobile sub-tab: chat | stream
   const [thread, setThread] = useState(null);
   const [pr, setPr] = useState(null);
   const [appInfo, setAppInfo] = useState(null);
@@ -344,8 +344,6 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
   moreItems.push({ sep: true });
   moreItems.push(html`<button class=${"menu-item danger" + (db ? " busy" : "")} disabled=${db} onClick=${() => confirmAct("del", () => act.del(repo, number))}>${db ? html`<${Spinner} size=${15}/>` : html`<${Icon} name="trash" size=${15}/>`}<span class="mi-label">${db ? "Deleting…" : da ? "Tap again to delete" : "Delete"}</span></button>`);
 
-  const streamPane = html`<${StreamPane} startError=${startError} stream=${stream} streamRef=${streamRef} streamAtBottom=${streamAtBottom} onScroll=${onStreamScroll}/>`;
-
   const chatPane = html`<${ThreadPane}
     issue=${issue} repo=${repo} number=${number} act=${act} data=${data}
     onOpenIssue=${onOpenIssue} onClose=${onClose} onOpenModels=${onOpenModels}
@@ -353,6 +351,7 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
     chatRef=${chatRef} onChatScroll=${onChatScroll} chatAtTop=${chatAtTop} chatAtBottom=${chatAtBottom}
     running=${running} review=${review} pr=${pr} conflict=${conflict} conflictFiles=${conflictFiles}
     armed=${armed} confirmAct=${confirmAct}
+    stream=${stream} startError=${startError} streamRef=${streamRef} streamAtBottom=${streamAtBottom} onStreamScroll=${onStreamScroll}
   />`;
 
   return html`<div class=${"detail on" + (docked ? " docked" : "")}>
@@ -360,10 +359,11 @@ export function Detail({ issue, activity, act, isDesktop, startError, onClose, o
       issue=${issue} repo=${repo} number=${number} onClose=${onClose} data=${data} act=${act}
       running=${running} modelOverride=${modelOverride} onModelChange=${updateModelOverride} onOpenModels=${onOpenModels}
       tb=${tb} tbLeft=${tbLeft} runAppBtns=${runAppBtns} tbRight=${tbRight} moreItems=${moreItems}
-      moreOpen=${moreOpen} setMoreOpen=${setMoreOpen} isDesktop=${isDesktop} tab=${tab} setTab=${setTab}
+      moreOpen=${moreOpen} setMoreOpen=${setMoreOpen}
     />
+    ${issue.epic ? html`<${EpicChecklist} epic=${{ ...issue.epic, parent: number }} repo=${repo} onOpen=${onOpenIssue} onClose=${() => act.close(repo, number).then(onClose)} closing=${act.isBusy("close", repo, number)} act=${act} data=${data} onOpenModels=${onOpenModels}/>` : null}
     <div class="dpanes">
-      ${isDesktop ? html`${chatPane}${streamPane}` : tab === "chat" ? chatPane : streamPane}
+      ${chatPane}
     </div>
     ${timelineModel(issue).started ? html`<div class="dtl-timeline"><${DetailTimeline} issue=${issue} data=${data} onOpenModels=${onOpenModels}/></div>` : null}
     <${ActionDock} issue=${issue} repo=${repo} number=${number} act=${act} onClose=${onClose} pending=${pendingQuestion} onPick=${sendFull}/>

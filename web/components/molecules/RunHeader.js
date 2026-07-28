@@ -1,6 +1,7 @@
-// RunHeader molecule — the Detail drawer's header cluster: title/breadcrumb/status/heat row, the
-// action toolbar (route›model›play + info/destructive/positive buttons + "More" overflow menu), and
-// the mobile Chat/Stream tab switch. Extracted from organisms/Detail.js (P6 split); logic unchanged.
+// RunHeader molecule — the Detail drawer's header cluster: title/breadcrumb/status/heat row and the
+// action toolbar (route›model›play + info/destructive/positive buttons + "More" overflow menu).
+// The mobile Chat/Stream tab switch is gone — the stream now lives inside the conversation itself
+// (see ActivityLog), so there's a single pane on every screen size.
 // The toolbar's button arrays (tb/tbLeft/tbRight/moreItems) stay built in Detail — they're deeply
 // tied to its local busy/armed state — this molecule only lays them out.
 import { html } from "/web/vendor/standalone.mjs";
@@ -12,7 +13,7 @@ import { statusChip } from "../../lib/issue-logic.js";
 
 export function RunHeader({
   issue, repo, number, onClose, data, act, running, modelOverride, onModelChange, onOpenModels,
-  tb, tbLeft, runAppBtns, tbRight, moreItems, moreOpen, setMoreOpen, isDesktop, tab, setTab,
+  tb, tbLeft, runAppBtns, tbRight, moreItems, moreOpen, setMoreOpen,
 }) {
   return html`
     <div class="dhead dh">
@@ -46,9 +47,5 @@ export function RunHeader({
         <button class="tbtn" data-tip="More actions" onClick=${() => setMoreOpen((o) => !o)}><${Icon} name=${moreOpen ? "x" : "menu"}/></button>
         ${moreOpen ? html`<div class="dropscrim" onClick=${() => setMoreOpen(false)}></div><div class="dropmenu menu">${moreItems.map((it, i) => it && it.sep ? html`<div key=${i} class="menu-sep"></div>` : html`<span key=${i}>${it}</span>`)}</div>` : null}
       </span>` : null}
-    </div>
-    ${!isDesktop ? html`<div class="segwrap"><div class="segctl">
-      <button class=${"segbtn" + (tab === "chat" ? " on" : "")} onClick=${() => setTab("chat")}>Chat</button>
-      <button class=${"segbtn" + (tab === "stream" ? " on" : "")} onClick=${() => setTab("stream")}>Stream</button>
-    </div></div>` : null}`;
+    </div>`;
 }
