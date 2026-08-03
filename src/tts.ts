@@ -18,29 +18,39 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSyn
 import { dirname, join } from "node:path";
 
 export type Quality = "low" | "medium" | "high";
+export type Gender = "m" | "f";
 export interface VoiceCfg {
   /** Piper voice name under rhasspy/piper-voices en/en_US/<name>/<quality>/… */
   name: string;
   quality: Quality;
   /** length_scale: >1 slower (thinking), <1 faster (snappy). Character lever #2. */
   speed: number;
+  /** The agent persona's gender — must match the voice's gender and the `-f` avatar variant. */
+  gender: Gender;
   /** Human note on the intended character — documentation only. */
   character: string;
 }
 
-// One distinct voice + character per role. Mixed quality (high for the two "flagship" roles the
-// user hears most, medium elsewhere; danny only ships "low"). Names verified against
-// huggingface.co/rhasspy/piper-voices (en_US).
+// Piper en_US voice name → its speaker's gender (verified against the catalog). Asserts each role's
+// voice matches its agent persona's gender: the avatar `-f` variants are female, the rest male.
+export const VOICE_GENDER: Record<string, Gender> = {
+  lessac: "f", amy: "f", kristin: "f", "hfc_female": "f",
+  ryan: "m", joe: "m", "hfc_male": "m", kusal: "m", danny: "m", john: "m",
+};
+
+// One distinct voice + character per role, each gender-matched to its agent persona. Mixed quality
+// (high for the two "flagship" roles the user hears most, medium elsewhere; danny only ships
+// "low"). Names verified against huggingface.co/rhasspy/piper-voices (en_US).
 export const ROLE_VOICES: Record<string, VoiceCfg> = {
-  planner:    { name: "lessac",     quality: "high",   speed: 1.12, character: "measured, thinking out loud" },
-  decomposer: { name: "amy",        quality: "medium", speed: 0.92, character: "brisk, breaks things down fast" },
-  architect:  { name: "ryan",       quality: "high",   speed: 1.15, character: "deep, deliberate, big-picture" },
-  developer:  { name: "joe",        quality: "medium", speed: 0.95, character: "upbeat, eager, a little tacky" },
-  reviewer:   { name: "hfc_male",   quality: "medium", speed: 1.0,  character: "dry, matter-of-fact" },
-  tester:     { name: "hfc_female", quality: "medium", speed: 0.85, character: "chipper, quick, curious" },
-  librarian:  { name: "kristin",    quality: "medium", speed: 1.05, character: "soft, tidy, precise" },
-  auditor:    { name: "kusal",      quality: "medium", speed: 1.15, character: "serious, slow, weighs things" },
-  analyzer:   { name: "danny",      quality: "low",    speed: 0.9,  character: "clipped, robotic, rapid" },
+  planner:    { name: "lessac",   quality: "high",   speed: 1.12, gender: "f", character: "measured, thinking out loud" },
+  decomposer: { name: "john",     quality: "medium", speed: 0.92, gender: "m", character: "brisk, breaks things down fast" },
+  architect:  { name: "ryan",     quality: "high",   speed: 1.15, gender: "m", character: "deep, deliberate, big-picture" },
+  developer:  { name: "amy",      quality: "medium", speed: 0.95, gender: "f", character: "upbeat, eager, a little tacky" },
+  reviewer:   { name: "hfc_male", quality: "medium", speed: 1.0,  gender: "m", character: "dry, matter-of-fact" },
+  tester:     { name: "joe",      quality: "medium", speed: 0.85, gender: "m", character: "chipper, quick, curious" },
+  librarian:  { name: "kristin",  quality: "medium", speed: 1.05, gender: "f", character: "soft, tidy, precise" },
+  auditor:    { name: "kusal",    quality: "medium", speed: 1.15, gender: "m", character: "serious, slow, weighs things" },
+  analyzer:   { name: "danny",    quality: "low",    speed: 0.9,  gender: "m", character: "clipped, robotic, rapid" },
 };
 
 export const TTS_ROLES = Object.keys(ROLE_VOICES);

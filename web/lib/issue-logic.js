@@ -25,10 +25,12 @@ export function classify(i) {
 
 // Sound cue an issue's current status warrants, or null. Consumers fire the effect only when this
 // value CHANGES between polls (not every render): "attention" when the issue starts needing the
-// human (approve / answer / attention / conflict), "done" when it finishes.
+// human (approve / answer / attention / conflict), "done" when it finishes, "working" when it
+// starts building (moves into the Working lane) — so the agent reports every kanban crossing.
 export function soundEvent(i) {
   if (isDone(i)) return "done";
   if (i.blocked === "awaitingApproval" || i.blocked === "awaitingAnswer" || i.blocked === "needsAttention" || i.blocked === "conflict") return "attention";
+  if (i.active || i.queued || i.running) return "working";
   return null;
 }
 

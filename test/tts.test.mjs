@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { TTS_ROLES, ROLE_VOICES, synth } = await import("../dist/tts.js");
+const { TTS_ROLES, ROLE_VOICES, VOICE_GENDER, synth } = await import("../dist/tts.js");
 
 test("every agent role has a distinct voice configured", () => {
   const expected = ["planner", "decomposer", "architect", "developer", "reviewer", "tester", "librarian", "auditor", "analyzer"];
@@ -14,6 +14,15 @@ test("every agent role has a distinct voice configured", () => {
     const c = ROLE_VOICES[r];
     assert.ok(["low", "medium", "high"].includes(c.quality), `${r} quality valid`);
     assert.ok(c.speed > 0.5 && c.speed < 2, `${r} speed sane`);
+  }
+});
+
+test("each role's voice gender matches its agent persona's gender", () => {
+  for (const r of TTS_ROLES) {
+    const c = ROLE_VOICES[r];
+    const vg = VOICE_GENDER[c.name];
+    assert.ok(vg, `${c.name} missing from VOICE_GENDER map`);
+    assert.equal(vg, c.gender, `${r}: voice gender ${vg} != agent gender ${c.gender}`);
   }
 });
 

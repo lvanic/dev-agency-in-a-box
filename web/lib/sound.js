@@ -71,7 +71,9 @@ export function preview(name) {
 // spoken line are gated independently (chime by its own key, speech by "voices").
 export function playCue(kind, number, role, blocked) {
   if (!isSoundOn()) return;
-  if (isSoundKindOn(kind)) fire(kind); // the brief ding (own toggle)
+  // Only attention/done carry a brief chime wav; "working" is spoken-only (it fires often, and a
+  // ding each time an issue starts would be noisy — the agent speaking "building now" is the cue).
+  if (kind !== "working" && isSoundKindOn(kind)) fire(kind);
   if (isSoundKindOn("voices") && number != null) voiceLine(announcer(role, kind), statusLine(kind, blocked, number));
 }
 
@@ -95,15 +97,17 @@ const HOVER_LINES = {
   analyzer:   ["analyzing", "crunching the numbers", "scanning now"],
 };
 
-// Who announces a status change, and the line they speak (with the issue number).
+// Who announces a status change, and the line they speak (with the issue number). Each transition
+// has a voice + phrasing: the issue's own agent speaks in its gender-matched voice.
 function announcer(role, kind) {
   const r = String(role || "").toLowerCase();
   if (VOICE_ROLES.indexOf(r) >= 0) return r;
-  return kind === "done" ? "developer" : "reviewer";
+  return kind === "attention" ? "reviewer" : "developer"; // unknown role: reviewer flags review, developer builds/ships
 }
 function statusLine(kind, blocked, n) {
   const N = "issue " + n;
-  if (kind === "done") return pick([N + ", done!", "shipped " + N, N + ", done and dusted"]);
+  if (kind === "done") return pick([N + " complete, ready to merge", "shipped " + N, N + ", done and dusted"]);
+  if (kind === "working") return pick(["building now", "on it, " + N, N + ", coding now", "let's build"]);
   if (blocked === "awaitingApproval" || blocked === "awaitingAnswer") return pick(["review ready, " + N, N + " is ready for review", N + ", take a look"]);
   return pick([N + " needs you", "heads up, " + N + " needs a look", N + ", your call"]); // needsAttention / conflict
 }
@@ -112,9 +116,9 @@ function pick(arr) { return arr[(pickN++) % arr.length]; }
 
 // --- Web Speech fallback (per-role pitch/rate + a distinct system voice) ---
 const SS_CFG = {
-  planner: { pitch: 1.0, rate: 1.0 }, decomposer: { pitch: 1.3, rate: 1.15 }, architect: { pitch: 0.8, rate: 0.95 },
-  developer: { pitch: 1.1, rate: 1.1 }, reviewer: { pitch: 0.95, rate: 1.0 }, tester: { pitch: 1.4, rate: 1.2 },
-  librarian: { pitch: 1.05, rate: 0.95 }, auditor: { pitch: 0.85, rate: 0.95 }, analyzer: { pitch: 1.2, rate: 1.05 },
+  planner: { pitch: 1.1, rate: 1.0 }, decomposer: { pitch: 0.95, rate: 1.15 }, architect: { pitch: 0.8, rate: 0.95 },
+  developer: { pitch: 1.15, rate: 1.1 }, reviewer: { pitch: 0.9, rate: 1.0 }, tester: { pitch: 1.0, rate: 1.2 },
+  librarian: { pitch: 1.1, rate: 0.95 }, auditor: { pitch: 0.85, rate: 0.95 }, analyzer: { pitch: 0.95, rate: 1.05 },
 };
 const hasSpeech = typeof speechSynthesis !== "undefined" && typeof SpeechSynthesisUtterance !== "undefined";
 // macOS/WebKit ships "novelty" voices (Bahh, Boing, …) that make joke NOISES, not words — skip them.
