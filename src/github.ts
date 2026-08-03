@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { sBool, sStr } from "./settings.js";
 import { ghBotToken, ghUserToken } from "./creds.js";
-import { recordOutgoingComment, setCommentGhId, getConversation, recordIncident, getSetting } from "./store.js";
+import { recordOutgoingComment, setCommentGhId, getConversation, recordIncident, getSetting, bumpApiCall } from "./store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,7 +100,19 @@ export async function ghCoreRateRemaining(): Promise<number | null> {
 }
 
 /** Run gh as the human owner ("acts as you"); empty token falls back to the stored owner/bot token. */
+/** Normalize a REST path so numeric ids collapse to `:n` — groups calls by shape for counting. */
+function normalizePath(path: string): string {
+  return path.split("?")[0].split("/").map((s) => (/^\d+$/.test(s) ? ":n" : s)).join("/");
+}
+/** Coarse endpoint key from gh args for diagnostic call counting (drops ids/flags → groups calls). */
+export function endpointKey(args: string[]): string {
+  const a = args.filter((x) => !x.startsWith("-"));
+  if (a[0] === "api") return `api ${normalizePath(a[1] || "")}`;
+  return a.slice(0, 2).join(" ") || a[0] || "gh";
+}
+
 async function ghAs(token: string, args: string[]): Promise<string> {
+  bumpApiCall(endpointKey(args));
   if (circuitOpen()) throw circuitError();
   const t = token || ghUserToken() || ghBotToken();
   try {
@@ -117,6 +129,7 @@ async function ghAs(token: string, args: string[]): Promise<string> {
 
 /** Run gh as the agency bot, using the dashboard-stored bot token (or GITHUB_TOKEN env). */
 async function gh(args: string[]): Promise<string> {
+  bumpApiCall(endpointKey(args));
   if (circuitOpen()) throw circuitError();
   const token = ghBotToken();
   try {
@@ -225,6 +238,7 @@ function ghHeaders(): Record<string, string> | null {
 async function ghFetchPage(path: string): Promise<unknown[] | null> {
   const h = ghHeaders();
   if (!h) return null;
+  bumpApiCall(`rest ${normalizePath(path)}`);
   try {
     const r = await fetch(`https://api.github.com/${path}`, { headers: h });
     if (!r.ok) return null;
@@ -240,6 +254,7 @@ async function ghFetchAll(path: string): Promise<unknown[] | null> {
     let url: string = `https://api.github.com/${path}${path.includes("?") ? "&" : "?"}per_page=100`;
     const out: unknown[] = [];
     for (let i = 0; i < 20 && url; i++) {
+      bumpApiCall(`rest ${normalizePath(path)}`);
       const r = await fetch(url, { headers: h });
       if (!r.ok) return null;
       const page = await r.json();

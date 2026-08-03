@@ -27,6 +27,35 @@ export function recordIncident(kind: string, detail: string): void {
   recordRunStep("", 0, "system", kind, detail, false);
 }
 
+// ── Per-endpoint GitHub API call counting (diagnostic) ───────────────────────────────────────────
+// Purely observational, layered on recordIncident("github-rate-limit"): that surfaces a 429 AFTER it
+// trips; this counts calls per coarse endpoint key so a runaway caller (a scan loop hammering one
+// endpoint) is caught BEFORE the limit is hit. In-memory only (resets on restart) — it's a live
+// pressure gauge, not durable history. When one endpoint crosses the threshold within the current
+// window we emit ONE incident + warn, then reset that endpoint's counter so it only re-warns if the
+// pressure recurs.
+const HOT_ENDPOINT_THRESHOLD = Number(process.env.GH_ENDPOINT_WARN?.trim()) || 200;
+const apiCallCounts = new Map<string, number>();
+
+/** Count one GitHub call against its coarse endpoint key (e.g. "pr list", "api repos/:/:/issues/:n/comments"). */
+export function bumpApiCall(endpoint: string): void {
+  const n = (apiCallCounts.get(endpoint) ?? 0) + 1;
+  apiCallCounts.set(endpoint, n);
+  if (n >= HOT_ENDPOINT_THRESHOLD) {
+    recordIncident("github-endpoint-hot", `gh endpoint "${endpoint}" reached ${n} calls in the current window — likely a scan-loop hot spot`);
+    console.warn(`[agency] gh endpoint "${endpoint}" reached ${n} calls this window — check for a scan loop`);
+    apiCallCounts.set(endpoint, 0); // reset this endpoint's window; re-warns only if the pressure recurs
+  }
+}
+
+export interface ApiCallStat { endpoint: string; calls: number }
+/** Snapshot of current per-endpoint call counts, busiest first — diagnostic (dashboard / post-run audit). */
+export function apiCallStats(): ApiCallStat[] {
+  return [...apiCallCounts.entries()]
+    .map(([endpoint, calls]) => ({ endpoint, calls }))
+    .sort((a, b) => b.calls - a.calls);
+}
+
 export interface FailureStat { role: string; tool: string; count: number; sample: string }
 
 export function recentFailuresSince(sinceIso: string, limit = 15): FailureStat[] {

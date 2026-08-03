@@ -27,7 +27,7 @@ export type { Workflow, WorkflowStep, WorkflowGate } from "./db/workflows.js";
 export type { RunRow } from "./db/runs.js";
 export { upsertLocalIssue, getLocalIssue, listLocalOpenIssues, nextLocalIssueNumber, addLocalComment, getLocalComments, recordOutgoingComment, setCommentGhId, foldInGitHubComment, updateCommentBody, deleteLocalCommentByGhId, getConversation, conversationCount } from "./db/local.js";
 export type { LocalIssue, LocalComment, ConversationComment } from "./db/local.js";
-export { getAutoRaw, setAuto, autoEnabled, autoAttempts, bumpAutoAttempts, resetAutoAttempts } from "./db/auto.js";
+export { getAutoRaw, setAuto, autoEnabled, autoAttempts, bumpAutoAttempts, resetAutoAttempts, isAutoParked, markAutoParked, clearAutoParked } from "./db/auto.js";
 export type { AutoKind, AutoValue } from "./db/auto.js";
 export { upsertSkill, getSkill, listSkills, deleteSkill, skillsPrompt, upsertHook, listHooks, deleteHook, seedLibrary } from "./db/skills_hooks.js";
 export type { Skill, Hook } from "./db/skills_hooks.js";
@@ -77,8 +77,8 @@ export {
   topIssuesByTokensSince, tokensByIssueAll, tokensSince, tokensByModelSince, spendSince,
 } from "./db/tokens.js";
 export { recordPlan, lastPlan } from "./db/plans.js";
-export { recordRunStep, toolStatsSince, recordIncident, recentFailuresSince, runStepCountSince } from "./db/telemetry.js";
-export type { ToolStat, FailureStat } from "./db/telemetry.js";
+export { recordRunStep, toolStatsSince, recordIncident, recentFailuresSince, runStepCountSince, bumpApiCall, apiCallStats } from "./db/telemetry.js";
+export type { ToolStat, FailureStat, ApiCallStat } from "./db/telemetry.js";
 export {
   recordIssueFiles, filesFor, addIssueFiles, recordIssueState, recordIssueStatus, getIssueStatus,
   recordPr, getIssueRow, recentIssues, archiveIssue, unarchiveIssue, isArchived, getIssueRole, setByAgent, resetIssueData,

@@ -39,4 +39,22 @@ export function bumpAutoAttempts(repo: string, number: number): number {
 
 export function resetAutoAttempts(repo: string, number: number): void {
   setSetting(`auto.attempts.${repo}#${number}`, "0");
+  clearAutoParked(repo, number); // reached a good state → allow future auto-runs (and re-park) again
+}
+
+/**
+ * "Parked for a human" latch. Set once when an issue exhausts its auto-attempts so we post the
+ * structured give-up summary exactly ONCE instead of every auto-mode tick. Cleared by
+ * resetAutoAttempts when the issue reaches a good state (so a later regression can re-park + re-notify).
+ */
+export function isAutoParked(repo: string, number: number): boolean {
+  return getSetting(`auto.parked.${repo}#${number}`) === "1";
+}
+
+export function markAutoParked(repo: string, number: number): void {
+  setSetting(`auto.parked.${repo}#${number}`, "1");
+}
+
+export function clearAutoParked(repo: string, number: number): void {
+  setSetting(`auto.parked.${repo}#${number}`, "");
 }

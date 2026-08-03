@@ -86,6 +86,8 @@ import {
   autoAttempts,
   bumpAutoAttempts,
   resetAutoAttempts,
+  isAutoParked,
+  markAutoParked,
   setAuto,
   getFallbackChain,
   getAutoSwitchOnLimit,
@@ -1356,6 +1358,30 @@ const AUTO_MAX_ATTEMPTS = Number(process.env.AUTO_MAX_ATTEMPTS?.trim()) || 8;
 const AUTO_INTERVAL_MS = (Number(process.env.AUTO_INTERVAL_SEC?.trim()) || 150) * 1000;
 
 /**
+ * Loop-budget escalation: once an issue exhausts AUTO_MAX_ATTEMPTS, stop silently re-queuing it
+ * (which burned runs + tokens on a stuck issue — the Process Analyzer's runaway-loop finding).
+ * Instead park it at needs-attention and post a structured summary (symptom / attempts /
+ * recommendation) exactly ONCE, via the isAutoParked latch, then leave it for a human. The latch
+ * clears when resetAutoAttempts fires (issue reached a good state), so a later regression re-notifies.
+ */
+async function parkForHuman(repo: string, n: number, symptom: string): Promise<void> {
+  if (isAutoParked(repo, n)) return; // already summarised — don't re-comment every tick
+  markAutoParked(repo, n);
+  const attempts = autoAttempts(repo, n);
+  recordIssueStatus(repo, n, setBlocked(withStatus("working"), "needsAttention"));
+  recordIncident("auto-loop-parked", `${repo}#${n} parked after ${attempts} attempts: ${symptom}`);
+  pushActivity(repo, n, "agency", "done", `⏸ Parked for a human after ${attempts} auto attempts — ${symptom}.`);
+  const body = [
+    `⏸ **Parked for a human** — auto-mode gave up after **${attempts}** attempt(s) (cap \`AUTO_MAX_ATTEMPTS=${AUTO_MAX_ATTEMPTS}\`).`,
+    ``,
+    `- **Symptom:** ${symptom}`,
+    `- **Attempts:** ${attempts} auto-resume/fix pass(es) never reached an approved + mergeable state.`,
+    `- **Recommendation:** a maintainer should inspect the PR / failing checks manually — repeated automated passes are no longer making progress. Fix the underlying blocker, then press **Resume** to re-enable auto-mode.`,
+  ].join("\n");
+  await commentOnIssue(repo, n, body).catch(() => {});
+}
+
+/**
  * Auto-mode loop: for issues you've opted into auto, drive a PR all the way to merged without you
  * pressing buttons — auto-merge when the review approved + no conflicts + checks green, otherwise
  * auto-resume/fix (address review, resolve conflicts, fix failing checks) until it gets there.
@@ -1408,7 +1434,10 @@ function startAutoMode(cfg: Config): void {
           if (wantResume) {
             const needsWork = verdict === "changes" || health.status === "conflict" || health.status === "failing";
             if (!needsWork) continue; // approved+clean but merge off, or checks pending — just wait
-            if (autoAttempts(repo, n) >= AUTO_MAX_ATTEMPTS) continue; // give up quietly; leave for human
+            if (autoAttempts(repo, n) >= AUTO_MAX_ATTEMPTS) { // exhausted → park + summarise for a human
+              await parkForHuman(repo, n, `review verdict=${verdict ?? "?"}, checks=${health.status}`);
+              continue;
+            }
             bumpAutoAttempts(repo, n);
             console.log(`[agency] auto-fix ${repo} #${n} (attempt ${autoAttempts(repo, n)}, verdict=${verdict ?? "?"}, health=${health.status})`);
             await forceFix(cfg, repo, n);
@@ -1423,7 +1452,10 @@ function startAutoMode(cfg: Config): void {
           if (getIssueStatus(repo, i.number).blocked !== "needsAttention") continue;
           if (!autoEnabled("resume", repo, i.number)) continue;
           if (inFlight(repo, i.number)) continue;
-          if (autoAttempts(repo, i.number) >= AUTO_MAX_ATTEMPTS) continue;
+          if (autoAttempts(repo, i.number) >= AUTO_MAX_ATTEMPTS) { // exhausted → park + summarise for a human
+            await parkForHuman(repo, i.number, "run keeps interrupting without completing (parked at needs-attention)");
+            continue;
+          }
           bumpAutoAttempts(repo, i.number);
           console.log(`[agency] auto-resume ${repo} #${i.number} (attempt ${autoAttempts(repo, i.number)})`);
           await forceResume(cfg, repo, i.number);
