@@ -15,13 +15,14 @@ export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoBr
   const [newName, setNewName] = useState("");
   const [isPrivate, setIsPrivate] = useState(true);
   const [branchEdits, setBranchEdits] = useState({}); // repo+"/"+kind → in-progress value
+  const [stagingOpen, setStagingOpen] = useState({}); // repo → true to reveal staging override
   const branches = repoBranches || {};
   const branchVal = (r, k) => { const e = branchEdits[r + "/" + k]; return e !== undefined ? e : ((branches[r] || {})[k] || ""); };
   const editBranch = (r, k, v) => setBranchEdits((s) => ({ ...s, [r + "/" + k]: v }));
   function saveBranch(r, kind) {
     const value = branchVal(r, kind).trim();
     api("/repo-branches", { repo: r, [kind]: value })
-      .then(() => { toast(kind + " branch saved"); reload(); })
+      .then(() => { toast(kind + " branch saved"); if (kind === "staging" && !value) setStagingOpen((s) => ({ ...s, [r]: false })); reload(); })
       .catch((e) => toast((e && e.message) || "Couldn’t save", "error"));
   }
   const branchInput = (r, kind, label) => html`<label class="repodrop-branch" style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-2)">
@@ -67,10 +68,16 @@ export function RepoPicker({ repos, reload, showAuto, autoRepos, setAuto, repoBr
         <button class="repodrop-x" disabled=${busy} aria-label=${"Remove " + r} data-tip="Stop watching" onClick=${() => remove(r)}><${Icon} name="trash" size=${14}/></button>
       </div>
     </div>
-    ${showAuto ? html`<div class="repodrop-branchrow" style="display:flex;flex-direction:column;gap:4px;padding:2px 4px 8px 26px" key=${r + ":br"}>
-      ${branchInput(r, "staging", "staging")}
-      ${branchInput(r, "production", "prod")}
-    </div>` : null}`)}
+    ${showAuto ? (() => {
+      const showStaging = stagingOpen[r] || !!((branches[r] || {}).staging) || !!(branchEdits[r + "/staging"]);
+      return html`<div class="repodrop-branchrow" style="display:flex;flex-direction:column;gap:4px;padding:2px 4px 8px 26px" key=${r + ":br"}>
+      <div style="display:flex;align-items:center;gap:4px">
+        ${branchInput(r, "production", "prod")}
+        ${showStaging ? null : html`<button class="iconbtn" style="width:24px;height:24px;border:none;flex:none" data-tip="Add staging branch override" aria-label="Add staging branch override" onClick=${() => setStagingOpen((s) => ({ ...s, [r]: true }))}><${Icon} name="plus" size=${13}/></button>`}
+      </div>
+      ${showStaging ? branchInput(r, "staging", "staging") : null}
+    </div>`;
+    })() : null}`)}
     <div class="dropmenu-h">Add a repo</div>
     <div class="repodrop-add">
       <input placeholder="owner/name" value=${manual} onInput=${(e) => setManual(e.target.value)} onKeyDown=${(e) => { if (e.key === "Enter") add(manual.trim()); }}/>

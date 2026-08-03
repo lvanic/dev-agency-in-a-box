@@ -394,6 +394,59 @@ test("repo dropdown is a plain repo switcher; auto-pills live in Settings > Repo
   dom.window.close();
 });
 
+// RepoPicker per-repo branch settings (#254): production shows by default (compact single field);
+// a "+" reveals a staging-branch override; an existing staging value auto-reveals it.
+test("RepoPicker shows prod-only by default, '+' reveals staging, existing staging auto-shows", async () => {
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: "https://devagency.test/" });
+  const { window } = dom;
+  const setG = (k, v) => { try { global[k] = v; } catch { try { Object.defineProperty(global, k, { value: v, configurable: true }); } catch {} } };
+  setG("window", window); setG("document", window.document);
+  global.fetch = async () => ({ ok: true, json: async () => ({ repos: [] }), text: async () => "" });
+
+  const webDir = join(HERE, "..", "web");
+  const vendorUrl = pathToFileURL(join(webDir, "vendor", "standalone.mjs")).href;
+  const tmpDir = mkdtempSync(join(tmpdir(), "darp-"));
+  const copyDir = (src, dest) => {
+    mkdirSync(dest, { recursive: true });
+    for (const entry of readdirSync(src)) {
+      const srcPath = join(src, entry), destPath = join(dest, entry);
+      if (statSync(srcPath).isDirectory()) copyDir(srcPath, destPath);
+      else if (entry.endsWith(".js")) writeFileSync(destPath, readFileSync(srcPath, "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl));
+    }
+  };
+  for (const dir of ["components", "lib", "data"]) { const s = join(webDir, dir); if (existsSync(s)) copyDir(s, join(tmpDir, dir)); }
+  const { RepoPicker } = await import(pathToFileURL(join(tmpDir, "components", "molecules", "RepoPicker.js")).href);
+  const { html, render } = await import(vendorUrl);
+  const tick = (ms) => new Promise((r) => setTimeout(r, ms));
+  const click = (el) => { if (!el) throw new Error("element not found"); el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); };
+  const root = window.document.getElementById("root");
+
+  // No staging value → prod-only: exactly one branch input, plus a "+" to reveal staging.
+  render(html`<${RepoPicker} repos=${["acme/app"]} reload=${() => {}} showAuto=${true} autoRepos=${{ "acme/app": {} }}
+    setAuto=${() => {}} repoBranches=${{ "acme/app": { production: "main" } }}/>`, root);
+  await tick(10);
+  let inputs = window.document.querySelectorAll(".repodrop-branchrow input");
+  assert.equal(inputs.length, 1, "only the production field shows by default");
+  const plus = Array.from(window.document.querySelectorAll(".repodrop-branchrow button")).find((b) => /staging/.test(b.getAttribute("aria-label") || ""));
+  assert.ok(plus, "a '+' control to add a staging override is present");
+
+  // Click "+" → staging field revealed (two inputs, no more "+").
+  click(plus);
+  await tick(10);
+  inputs = window.document.querySelectorAll(".repodrop-branchrow input");
+  assert.equal(inputs.length, 2, "clicking '+' reveals the staging field");
+
+  // Existing staging value → auto-reveal (two inputs, no "+").
+  render(html`<${RepoPicker} repos=${["acme/app"]} reload=${() => {}} showAuto=${true} autoRepos=${{ "acme/app": {} }}
+    setAuto=${() => {}} repoBranches=${{ "acme/app": { production: "main", staging: "dev" } }}/>`, root);
+  await tick(10);
+  inputs = window.document.querySelectorAll(".repodrop-branchrow input");
+  assert.equal(inputs.length, 2, "an existing staging value auto-reveals both fields");
+  assert.ok(!Array.from(window.document.querySelectorAll(".repodrop-branchrow button")).some((b) => /staging/.test(b.getAttribute("aria-label") || "")), "no '+' when staging already shown");
+
+  dom.window.close();
+});
+
 // Pure unit tests for shapeToastMsg (web/lib/toast.js) — the toast-message tokenizer that splits a
 // string into text/url/path segments.
 test("shapeToastMsg tokenizes text, urls, paths and mixed messages", async () => {
