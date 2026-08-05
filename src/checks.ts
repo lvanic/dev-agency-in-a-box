@@ -8,7 +8,7 @@
  * genuinely needs interpreting.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getSetting, setSetting } from "./store.js";
 import { ghBotToken } from "./creds.js";
@@ -76,12 +76,23 @@ function firstError(out: string): string {
   return (hit || lines[lines.length - 1] || "").slice(0, 300);
 }
 
+/** A dependency the run needs isn't installed — the suite never really executed. Node and Python
+ *  both exit 1 for this, which is indistinguishable from a genuine test failure by code alone, so
+ *  the output has to be read. Matched on the runtime's own resolver wording. */
+const MISSING_DEP = /\b(cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|ModuleNotFoundError|No module named|cannot find package|Cannot find name 'describe'|package .* is not installed)\b/i;
+
 // A check whose non-zero exit means "the sandbox couldn't run it", NOT "the code is broken" — so we
 // never send the developer into a fix loop over it. 127 = command not found; pytest 2 = collection/
 // usage error (e.g. import error from missing deps), 5 = no tests collected.
-export function isEnvError(cmd: string, code: number): boolean {
+//
+// `out` matters for the most common case of all: a missing dependency exits 1, so without reading
+// the output it was scored as a real test failure — and then, because the same module is missing on
+// the base commit too, baselineFailures called it "already failing on main" and waved it through.
+// A live run shipped two issues that way with `Cannot find module 'supertest'` as its only "result".
+export function isEnvError(cmd: string, code: number, out = ""): boolean {
   if (code === 0) return false;
   if (code === 127) return true;
+  if (MISSING_DEP.test(out)) return true;
   if (/\bpytest\b/.test(cmd) && (code === 2 || code === 5)) return true;
   return false;
 }
@@ -236,10 +247,31 @@ export function parseDiscoveredChecks(text: string): CommandSet | null {
   }
 }
 
-/** Are project deps already on disk? Lets us skip a redundant reinstall when setup already ran it. */
+/**
+ * Are the project's deps on disk AND current? Lets us skip a redundant reinstall when setup already
+ * ran one — but only while the manifest hasn't moved since.
+ *
+ * "node_modules exists" alone is the wrong question. Deps are installed once at sandbox setup, and
+ * an agent that ADDS a dependency mid-run (the developer writing a test that needs supertest) leaves
+ * a node_modules that exists but no longer satisfies package.json. That skipped the reinstall and
+ * the suite then died on a missing module — which is exactly how a live run reported
+ * `Cannot find module 'supertest'` as its test result for two consecutive issues.
+ *
+ * So: compare the manifest's mtime against the install marker npm writes. Unreadable timestamps mean
+ * "reinstall" — a redundant `npm ci` costs seconds, a skipped one costs the whole check.
+ */
 function depsAlreadyInstalled(workdir: string, set: CommandSet): boolean {
-  if (set.requires === "node") return existsSync(join(workdir, "node_modules", ".bin"));
-  return false; // other stacks: let runChecks own the install
+  if (set.requires !== "node") return false; // other stacks: let runChecks own the install
+  if (!existsSync(join(workdir, "node_modules", ".bin"))) return false;
+  const mtime = (...p: string[]): number => {
+    try { return statSync(join(workdir, ...p)).mtimeMs; } catch { return 0; }
+  };
+  // npm >= 7 writes node_modules/.package-lock.json on every install; fall back to the directory.
+  const installedAt = mtime("node_modules", ".package-lock.json") || mtime("node_modules");
+  if (!installedAt) return false;
+  const manifestAt = Math.max(mtime("package.json"), mtime("package-lock.json"));
+  if (!manifestAt) return false;
+  return manifestAt <= installedAt;
 }
 
 /**
@@ -290,7 +322,7 @@ export async function runChecks(workdir: string, repo: string): Promise<ChecksOu
   const results: CheckResult[] = [];
   for (const c of set.checks) {
     const r = await run(c.cmd, workdir, 240_000, extraPath);
-    const env = isEnvError(c.cmd, r.code);
+    const env = isEnvError(c.cmd, r.code, r.out);
     results.push({ name: c.name, cmd: c.cmd, ok: r.code === 0, firstError: r.code === 0 ? "" : firstError(r.out), env });
   }
   const pass = results.every((r) => r.ok);
@@ -323,7 +355,14 @@ export async function baselineFailures(workdir: string, branch: string, failing:
   try {
     if ((await run(`git checkout --quiet --force ${base}`, workdir)).code !== 0) return pre;
     for (const c of failing) {
-      if ((await run(c.cmd, workdir)).code !== 0) pre.add(c.name); // already red on base → pre-existing
+      const r = await run(c.cmd, workdir);
+      if (r.code === 0) continue;
+      // Red on base too — but "the sandbox can't run this" is never a pre-existing CODE problem, and
+      // it reproduces on every commit by definition. Exempting it would turn a broken environment
+      // into a permanent green light for the whole suite, so leave it as introduced and let the
+      // env-blocked path park the PR for a human instead.
+      if (isEnvError(c.cmd, r.code, r.out)) continue;
+      pre.add(c.name); // already red on base → pre-existing
     }
   } finally {
     await run(`git checkout --quiet --force ${cur}`, workdir);
