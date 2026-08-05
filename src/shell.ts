@@ -619,8 +619,13 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .epicck{flex:0 0 auto;padding:0;color:var(--ink-3)}
 .epicck.done{color:var(--green)}
 .epicrow .substate{margin-left:auto}
-.epicnum{font-family:var(--font-mono);color:var(--ink-3)}
-.epictitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.epicnum{font-family:var(--font-mono);color:var(--ink-3);flex:none}
+/* min-width:0 is what actually lets the title shrink: a flex item defaults to min-width:auto, so
+   overflow/ellipsis alone never kicks in and a long sub-issue title pushed the model picker and the
+   ▶ button off the right edge on a phone. The row's controls stay pinned. */
+.epictitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.epicrow .substate{flex:none}
+.epicrow-w > *:not(.epicrow){flex:none}
 @container detailpane (max-width: 560px){
   .epicsec{padding:6px 12px 8px}
   .epicsec .epiclist{max-height:160px}

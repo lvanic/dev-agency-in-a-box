@@ -720,7 +720,15 @@ export async function mergePrForBranch(
   branch: string,
 ): Promise<{ ok: boolean; msg: string; files?: Array<{ path: string; additions?: number; deletions?: number }> }> {
   const pr = await findPrForBranch(repo, branch);
-  if (!pr) return { ok: false, msg: "no open PR for this issue" };
+  if (!pr) {
+    // No OPEN PR — but "already merged" is the outcome the caller wanted, not a failure. A merge
+    // that arrives twice (the dashboard's two-tap confirm, an auto-merge racing a human click)
+    // otherwise reported a hard error over a PR that had just merged successfully, which surfaced
+    // as a red "couldn't merge" toast on a branch that was already gone. Make it idempotent.
+    const done = await mergedPrForBranch(repo, branch);
+    if (done) return { ok: true, msg: done.url };
+    return { ok: false, msg: "no open PR for this issue" };
+  }
   // Capture the change set BEFORE merging (the branch is deleted on merge) for the change journal.
   let files: Array<{ path: string; additions?: number; deletions?: number }> | undefined;
   try {
@@ -1477,6 +1485,21 @@ export async function openUpstreamContribPr(
 }
 
 /** Find an open PR whose head branch matches `branch`, if any. */
+/** The already-MERGED PR for a branch, if there is one. Lets a repeated merge report success
+ *  instead of "no open PR" — see mergePrForBranch. */
+export async function mergedPrForBranch(repo: string, branch: string): Promise<{ number: number; url: string } | null> {
+  const out = await gh([
+    "pr", "list",
+    "--repo", repo,
+    "--head", branch,
+    "--state", "merged",
+    "--json", "number,url",
+    "--limit", "1",
+  ]).catch(() => "[]");
+  const raw = JSON.parse(out) as Array<{ number: number; url: string }>;
+  return raw.length > 0 ? raw[0] : null;
+}
+
 export async function findPrForBranch(repo: string, branch: string): Promise<PullRequest | null> {
   const out = await gh([
     "pr", "list",
