@@ -505,6 +505,18 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .wfctl__route .sel-cur{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wfctl__model .sel-cur{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
 @media (max-width:880px){.wfctl__route .sel-cur{max-width:110px}.wfctl__model .sel-cur{max-width:84px}}
+/* The route/model labels sit in the detail toolbar, so they must shrink with the PANE, not the
+   viewport — on a phone the pane is the whole screen and the viewport query above never narrowed
+   them enough, leaving "Default · Full build" and the model name overlapping each other. */
+.wfctl .sel{overflow:hidden}
+@container detailpane (max-width: 560px){
+  .wfctl__route .sel-cur{max-width:88px}
+  .wfctl__model .sel-cur{max-width:66px}
+}
+@container detailpane (max-width: 420px){
+  .wfctl__route .sel-cur{max-width:64px}
+  .wfctl__model .sel-cur{max-width:0;padding:0}
+}
 .wfctl--running{align-items:center;gap:7px;padding:0 12px;height:38px;color:var(--ink-2);background:var(--surface-2);cursor:default}
 .wfctl__name{font-weight:500;color:var(--ink-1);white-space:nowrap}
 .dtoolbar__sep{width:1px;align-self:stretch;background:var(--line);margin:4px 4px}
@@ -676,6 +688,17 @@ input,select,textarea{font-family:inherit;font-size:14px}
 .cmt-in table,.cmt__b table,.cmt .b table{display:table;width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;margin:.4em 0}
 .cmt-in th,.cmt-in td,.cmt__b th,.cmt__b td,.cmt .b th,.cmt .b td{border:1px solid var(--line);padding:4px 8px;text-align:left;white-space:normal;overflow-wrap:anywhere;word-break:break-word;vertical-align:top}
 .cmt-in a,.cmt__b a,.cmt .b a{overflow-wrap:anywhere}
+/* Folded blocks (a <details> in a GitHub body — e.g. the spec anchor pinned to a generated issue).
+   Collapsed by default: the anchor is reference material, not something to re-read every visit. */
+.mdfold{margin:.5em 0;border:1px solid var(--line);border-radius:8px;background:var(--bg);overflow:hidden}
+.mdfold > summary{cursor:pointer;padding:6px 10px;font-size:12.5px;font-weight:600;color:var(--ink-2);list-style:none}
+.mdfold > summary::-webkit-details-marker{display:none}
+.mdfold > summary::before{content:"▸ ";color:var(--ink-3)}
+.mdfold[open] > summary::before{content:"▾ "}
+.mdfold[open] > summary{border-bottom:1px solid var(--line)}
+.mdfold > *:not(summary){padding:0 10px}
+.mdfold > *:not(summary):first-of-type{padding-top:8px}
+.mdfold > *:not(summary):last-child{padding-bottom:8px}
 /* Images in rendered messages SCALE to the available space (never full-size inline) and open a
    full-page overlay on click — no modal cropping (see the delegated viewer in app.js). */
 .b img,.obub-txt img,.cmt-in img,.cmt__b img,.cmt .b img{max-width:100%;max-height:360px;width:auto;height:auto;object-fit:contain;border-radius:8px;display:block;cursor:zoom-in}
@@ -716,7 +739,11 @@ input,select,textarea{font-family:inherit;font-size:14px}
 }
 
 /* ── Status line ───────────────────────────────────────────────── */
-.statusline{flex:none;display:flex;align-items:center;gap:12px;padding:6px 16px calc(6px + var(--safe-b));border-top:1px solid var(--line);background:var(--surface);font-size:11.5px;color:var(--ink-3)}
+/* nowrap + scroll rather than wrap: the statusline is ambient chrome, and letting it wrap to three
+   rows (it did, at 375px) costs a tenth of a phone screen while STILL clipping the build stamp. */
+.statusline{flex:none;display:flex;align-items:center;gap:12px;padding:6px 16px calc(6px + var(--safe-b));border-top:1px solid var(--line);background:var(--surface);font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow-x:auto;scrollbar-width:none}
+.statusline::-webkit-scrollbar{display:none}
+.statusline > *{flex:none}
 .statusline .live{display:inline-flex;align-items:center;gap:5px;color:var(--green)}
 .statusline .dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
 .buildstamp{font-family:var(--font-mono);margin-left:auto}

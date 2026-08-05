@@ -24,10 +24,37 @@ export function mdInline(s) {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
+    // GitHub-authored text uses _underscore_ emphasis too (our own epic tracker writes `_(open)_`),
+    // which rendered with the underscores showing. Word-boundary-anchored so snake_case_names and
+    // __dunder__ are left alone.
+    .replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,;:!?])/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\(((?:https?:|\/)[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
+// Bodies come from GitHub, so they carry GitHub-flavoured HTML that this renderer escapes
+// wholesale (the right default — escHtml is the XSS boundary). Two constructs then surfaced as
+// literal tag soup in the thread, and both are ours: HTML-comment bookkeeping markers (the epic
+// tracker) and the <details> fold wrapping a long spec anchor, which GitHub collapses and we
+// rendered in full.
+const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+const DETAILS = /<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/i;
+
 export function md(src) {
+  const text = String(src || "").replace(HTML_COMMENT, "");
+  const m = DETAILS.exec(text);
+  if (!m) return mdBlocks(text);
+  // Only the <details> shell is ours; the summary and the body still go through the same
+  // escape-then-render path as everything else, so nothing user-supplied can inject markup.
+  return (
+    mdBlocks(text.slice(0, m.index)) +
+    '<details class="mdfold"><summary>' + escHtml(m[1].trim()) + "</summary>" +
+    mdBlocks(m[2]) +
+    "</details>" +
+    md(text.slice(m.index + m[0].length)) // any further folds in the remainder
+  );
+}
+
+function mdBlocks(src) {
   const lines = escHtml(String(src || "")).split(/\r?\n/), out = [];
   let inUL = false, inOL = false, inBQ = false, inCode = false, code = [];
   const closeUL = () => { if (inUL) { out.push("</ul>"); inUL = false; } };
