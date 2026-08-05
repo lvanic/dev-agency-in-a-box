@@ -134,7 +134,12 @@ function toLocalInput(d) {
 }
 function analyzerStatus(an) {
   if (!an || !an.enabled) return null;
-  if (!an.lastPull) return { cls: "amber", text: "analyzer connecting…", title: "Telemetry API is enabled but the analyzer hasn't checked in yet." };
+  // The sidecar reached us but its key is wrong — distinguishable from "never checked in" so the
+  // operator knows to fix AGENCY_API_KEY rather than hunt a dead container. Only trust a recent
+  // failure (< 6h) so a stale marker from a since-fixed key doesn't linger.
+  if (!an.lastPull && an.lastAuthFail && (Date.now() - new Date(an.lastAuthFail).getTime()) < 6 * 60 * 60 * 1000)
+    return { cls: "red", text: "analyzer key mismatch", title: "The analyzer sidecar is reaching the agency but its AGENCY_API_KEY doesn't match this agency's ANALYZER_API_KEY.\n\nCopy the key from Settings → General → Process Analyzer into the sidecar's AGENCY_API_KEY env and restart it." };
+  if (!an.lastPull) return { cls: "amber", text: "analyzer connecting…", title: "Telemetry API is enabled but the analyzer hasn't checked in yet.\n\nIf it never connects: the sidecar isn't running, or its AGENCY_URL/AGENCY_API_KEY aren't set. The key must match Settings → General → Process Analyzer." };
   const mins = (Date.now() - new Date(an.lastPull).getTime()) / 60000;
   const seen = "analyzer " + ago(an.lastPull) + " ago";
   // It polls on its own interval (hours); "stale" only if we haven't heard from it in ~half a day.

@@ -259,10 +259,17 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
         const hdr = (req.headers["authorization"] || "").toString();
         const got = hdr.startsWith("Bearer ") ? hdr.slice(7).trim() : "";
         const a = Buffer.from(got), b = Buffer.from(key);
-        if (!(a.length === b.length && timingSafeEqual(a, b))) return void res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
+        if (!(a.length === b.length && timingSafeEqual(a, b))) {
+          // Heartbeat for the WRONG-key case: the sidecar IS reaching us but its AGENCY_API_KEY
+          // doesn't match. Recorded so the dashboard can say "key mismatch" instead of leaving the
+          // status stuck on the indistinguishable "connecting…" (which also covers "never deployed").
+          setSetting("analyzer_last_auth_fail", new Date().toISOString());
+          return void res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
+        }
         if (aurl === "/telemetry") {
           if (req.method !== "GET") return void res.writeHead(405).end();
           setSetting("analyzer_last_pull", new Date().toISOString()); // heartbeat — surfaced in the dashboard
+          setSetting("analyzer_last_auth_fail", ""); // a good pull clears any stale key-mismatch marker
           const since = new URLSearchParams((req.url ?? "").split("?")[1] ?? "").get("since") || new Date(0).toISOString();
           return void res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
             since,
@@ -680,6 +687,9 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
                 // "enabled" reflects the real Settings → General kill-switch instead of key presence.
                 enabled: sBool("analyzer_enabled", "", true),
                 lastPull: getSetting("analyzer_last_pull") || null,
+                // Set when a request arrives with the wrong Bearer key (sidecar reachable but
+                // AGENCY_API_KEY ≠ agency's ANALYZER_API_KEY); cleared on the next good pull.
+                lastAuthFail: getSetting("analyzer_last_auth_fail") || null,
                 lastIssueAt: getSetting("analyzer_last_issue_ts") || null,
                 url: getSetting("analyzer_url") || null,
                 // Admin-only, for the masked reveal-to-copy control in Settings → General (the

@@ -828,6 +828,7 @@ html[data-theme="dark"] .gtip{background:#000;color:#fff}
 .andot{width:7px;height:7px;border-radius:50%;display:inline-block}
 .andot.green{background:var(--green)}
 .andot.amber{background:var(--amber)}
+.andot.red{background:var(--red)}
 .statpop{position:relative;display:inline-flex;align-items:center}
 .statlink{cursor:pointer;display:inline-flex;align-items:center;gap:5px;border-radius:6px;padding:1px 3px}
 .statlink:hover{background:var(--surface-2);color:var(--ink)}
