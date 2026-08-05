@@ -219,7 +219,9 @@ export interface RoleRunResult {
   costUsd: number;
 }
 
-async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: string, task?: string): Promise<string> {
+/** Exported for the prompt-cache regression test (test/prompt-cache.test.mjs), which asserts that
+ *  two different roles still share a long identical prefix — the property the cache depends on. */
+export async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: string, task?: string): Promise<string> {
   const def = ROLES[role];
   // Progressive disclosure: only load the domain playbooks this task actually touches (see
   // selectPlaybooks) — the developer's 9-playbook stack is the biggest recurring token slice.
@@ -255,10 +257,17 @@ async function buildSystemPrompt(role: RoleName, customPersona?: string, repo?: 
     "English (compact but readable — this is the one place readability beats brevity). Everything",
     "else: caveman-terse.",
     "",
-    persona,
-    "",
     "=== CONSTITUTION (hard rules — always obey) ===",
     constitution,
+    // ─────────── end of the SHARED prefix ───────────
+    // Everything ABOVE this line is byte-identical for every role on every repo, so the provider's
+    // prompt cache can serve it as a cache READ for the 2nd..Nth agent of a run instead of a fresh
+    // cache WRITE per agent. Anthropic's cache matches on an exact prefix: one role-specific byte
+    // near the top (the persona used to sit here) forks the prefix and every later role pays full
+    // price again. Keep all variable material — persona, playbooks, vault, lessons — BELOW.
+    "",
+    "=== YOUR ROLE ===",
+    persona,
     "",
     "=== PLAYBOOKS (how we build — binding) ===",
     playbooks,

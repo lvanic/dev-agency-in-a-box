@@ -28,6 +28,8 @@ import {
 import { renderEpicTracker } from "./epics.js";
 import { runRole } from "./agents/roleAgent.js";
 import { ROLES, roleTier } from "./agents/roles.js";
+import { SPEC_ANCHOR_HEADING } from "./agents/orchestrator-chat.js";
+import { parseOps, applyOps, renderOpResults } from "./mechanical.js";
 import type { Tier } from "./db/providers.js";
 import { isStopRequested, isHoldRequested } from "./abort.js";
 import {
@@ -163,6 +165,20 @@ function skipArchitect(): boolean {
 
 function issueHeader(issue: Issue): string {
   return `Issue #${issue.number}: ${issue.title}\n\n${issue.body || "(no description)"}`;
+}
+
+/**
+ * Extra reviewer instruction for issues the Orchestrator sliced out of a chat.
+ *
+ * Those issue bodies carry the user's verbatim request under SPEC_ANCHOR_HEADING. Without this the
+ * reviewer only ever checks the diff against the sliced scope line — which is how a live run shipped
+ * a dropped field and a rewritten response shape past four consecutive approvals: each reviewer was
+ * faithfully approving against a description that had already lost the requirement. Empty string for
+ * hand-written issues, which have no anchor and no drift to catch.
+ */
+function specGate(issue: Issue): string {
+  if (!issue.body?.includes(SPEC_ANCHOR_HEADING)) return "";
+  return `\n\n### Spec gate (blocking)\nThis issue was sliced out of a chat, and the user's original request is pinned in the issue body under "${SPEC_ANCHOR_HEADING}". Check the diff against THAT text, not just the scope line above it. Slicing is lossy: a field, a response shape or an edge case that the request states but the scope line omits is still in scope, and shipping without it is a defect — REQUEST CHANGES and name the missing requirement. If a requirement genuinely belongs to a different slice of the request, say which, and approve.`;
 }
 
 /** Legacy fallback: the reviewer's verdict from a bare "APPROVE"/"REQUEST CHANGES" first line. Used
@@ -641,6 +657,21 @@ async function build(
   // the human's newest note — e.g. a follow-up comment on already-delivered work. Everything else the
   // developer needs comes from the Handoff + digest below, never the concatenated thread.
   const followUpNote = latestHumanNote(thread);
+  // Mechanical ops first, done by code. Moving/renaming/deleting files is fully specified work with
+  // one right answer, so an agent adds cost and risk but no judgement — and it is exactly the kind
+  // of issue that otherwise burns a whole pipeline on a file move. Applied here so the developer
+  // starts from the repo's finished shape and is told not to redo it.
+  const ops = parseOps(issue.body || "");
+  let opsNote = "";
+  if (ops.length) {
+    const results = await applyOps(workdir, ops);
+    const rendered = renderOpResults(results);
+    pushActivity(repo, issue.number, "developer", "tool", `⚙️ Applied ${results.filter((r) => r.ok).length}/${results.length} mechanical op(s) — no agent needed`);
+    await say(repo, issue.number, "developer", `**Applied ${results.length} mechanical op(s) deterministically** (no tokens spent):\n\n${rendered}`);
+    opsNote =
+      `\n\n### Mechanical ops already applied (by code, before you started)\n${rendered}\n` +
+      `Do NOT redo these — the files are already in their new places. Commit them as part of your change, and fix anything that referenced the old paths.`;
+  }
   const devTask = resume
     ? `RESUMING an interrupted run. First \`git fetch origin ${branch}\` and check it out if it exists; review ` +
       `what's already committed (\`git log --oneline main..HEAD\`, \`git diff\`). Finish ONLY what's incomplete ` +
@@ -651,6 +682,7 @@ async function build(
       `Reuse existing code; keep the change small; add/extend tests. ${finishRule}\n\n` +
       `### Approved plan\n${planText}\n\n### ${issueHeader(issue)}` +
       (followUpNote ? `\n\n### Latest human note (apply this)\n${followUpNote}` : "") +
+      opsNote +
       handoffBlock(repo, issue.number, "dev", { br: branch });
 
   const dev = await runRole("developer", {
@@ -726,6 +758,7 @@ async function build(
         reviews === 0
           ? `Review the changes on branch \`${branch}\` for issue #${issue.number} against the harness. ` +
             `Inspect the diff vs main (e.g. \`git diff main...HEAD\`). ${REVIEWER_HANDOFF_INSTRUCTION}\n\nTest results were:\n${testText}` +
+            specGate(issue) +
             handoffBlock(repo, issue.number, "review", { br: branch, round, test: "p" })
           : `The developer addressed your previous requested changes on branch \`${branch}\`. Re-check ONLY ` +
             `whether each point you raised is now resolved (inspect \`git diff main...HEAD\`). ${REVIEWER_HANDOFF_INSTRUCTION}\n\nLatest tests:\n${testText}` +

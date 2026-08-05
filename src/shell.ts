@@ -1337,6 +1337,8 @@ textarea{resize:vertical;min-height:64px}
 .oprop-wf{display:flex;align-items:center;gap:8px;margin-bottom:9px}
 .oprop-wf label{font-size:12px;color:var(--ink-2);font-weight:600}
 .oprop-wf select{flex:1;border:1px solid var(--line);border-radius:9px;padding:6px 9px;font:13px inherit;background:var(--surface);color:var(--ink)}
+.oprop-epic{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;font-size:12.5px;color:var(--ink);cursor:pointer}
+.oprop-epic input{margin-top:2px;flex:none}
 .oprop-list{margin:0 0 10px;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .oprop-list li{font-size:13.5px;color:var(--ink)}
 .oprop-t{font-weight:600;display:block}

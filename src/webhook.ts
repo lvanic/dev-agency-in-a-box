@@ -37,8 +37,8 @@ import { binaryAvailable } from "./runners/registry.js";
 import { installSpec, installCli, RUNNER_PACKAGES } from "./runners/install.js";
 import { allToolchains, getToolchain, toolchainStatus, isInstalling, listToolchainRequests, installToolchain, toolchainsDir, sharedBinDir, toolchainProgress, subscribeToolchains, addCustomToolchain, removeCustomToolchain, reconcileStuckInstalls, repoToolset, pinRepoToolchain } from "./toolchains.js";
 import { parseLegacyStatus, withStatus, setBlocked } from "./state.js";
-import { runOrchestratorChat } from "./agents/orchestrator-chat.js";
-import { listOrchThread, clearOrchThread, setByAgent } from "./store.js";
+import { runOrchestratorChat, specAnchor, SPEC_ANCHOR_HEADING } from "./agents/orchestrator-chat.js";
+import { listOrchThread, clearOrchThread, setByAgent, addEpicChild } from "./store.js";
 import { getIssueBudget, setIssueBudget } from "./budget.js";
 import { renderShell } from "./shell.js";
 import { afterMerge } from "./merge_hooks.js";
@@ -2120,7 +2120,7 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // and presses Start). DB-first markers; GitHub is only the mirror.
           if (!repo) return res.writeHead(400).end(JSON.stringify({ error: "repo required" }));
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.writeHead(400).end(JSON.stringify({ error: `Bad repo "${repo}"` }));
-          const ph = p as { workflow?: string; issues?: Array<{ title?: string; scope?: string; route?: string }> };
+          const ph = p as { workflow?: string; epic?: string; issues?: Array<{ title?: string; scope?: string; route?: string }> };
           const wf = (ph.workflow ?? "full-build");
           const HANDLE: Record<string, string> = { "quick-fix": "@quickfix", "full-build": "@build", "plan-only": "@planonly", "split": "@split" };
           const fallbackRoute = HANDLE[wf] ?? "@build";
@@ -2129,15 +2129,40 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           const userTok = ghUserToken();
           if (!userTok) return res.writeHead(409).end(JSON.stringify({ error: "Add your GitHub token in Settings → credentials so the agency can create issues." }));
           const created: Array<{ number: number; title: string; url: string }> = [];
+          // The user's own words, pinned onto EVERY issue this handoff creates. Slicing is lossy —
+          // the scope lines are the Orchestrator's paraphrase — so each agent (and the reviewer's
+          // spec gate) needs the original request to check against. Read once, outside the loop.
+          const anchor = specAnchor(repo);
+          const anchorBlock = anchor
+            ? `\n\n${SPEC_ANCHOR_HEADING}\nThis issue is one slice of the request below. Your work must satisfy the part of it that falls in this issue's scope — if the scope and this spec disagree, the spec wins, and say so rather than silently narrowing.\n\n<details><summary>Original request</summary>\n\n${anchor}\n\n</details>`
+            : "";
+          // Ordered, dependent slices become ONE epic instead of N top-level issues: the epic's
+          // ▶ Play starts the next sub-issue as each one merges (onChildMerged), so the user clicks
+          // once rather than starting and merging every part by hand.
+          const epicTitle = (ph.epic ?? "").trim();
+          let epicParent = 0;
           try {
+            if (epicTitle && issues.length > 1) {
+              const parts = issues.map((it, n) => `${n + 1}. ${(it.title ?? "").trim()}`).join("\n");
+              const parentBody = `Epic — built as ${issues.length} sub-issues, in order:\n\n${parts}${anchorBlock}\n\nProposed by the 🧭 Orchestrator from a chat.`;
+              const par = await createIssue(repo, epicTitle, parentBody, userTok);
+              if (par.number) {
+                epicParent = par.number;
+                recordIssueStatus(repo, par.number, withStatus("planned"), { title: epicTitle });
+                setByAgent(repo, par.number, true);
+                created.push({ number: par.number, title: epicTitle, url: par.url });
+              }
+            }
             for (let n = 0; n < issues.length; n++) {
               const it = issues[n];
               const title = (it.title ?? "").trim();
               if (!title) continue;
               const pos = issues.length > 1 ? `\n\n— Part ${n + 1} of ${issues.length}.` : "";
-              const body = `${(it.scope ?? "").trim()}${pos}\n\nProposed by the 🧭 Orchestrator from a chat.`;
+              const parentRef = epicParent ? `\n\nPart of epic #${epicParent}.` : "";
+              const body = `${(it.scope ?? "").trim()}${pos}${parentRef}${anchorBlock}\n\nProposed by the 🧭 Orchestrator from a chat.`;
               const c = await createIssue(repo, title, body, userTok);
               if (!c.number) continue;
+              if (epicParent) addEpicChild(repo, epicParent, c.number, title);
               recordIssueStatus(repo, c.number, withStatus("planned"), { title });
               setByAgent(repo, c.number, true);
               // Route STRUCTURALLY (issue #140): the Orchestrator's per-issue recommendation

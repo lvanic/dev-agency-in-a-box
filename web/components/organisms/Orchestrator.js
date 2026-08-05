@@ -22,6 +22,9 @@ function ProposalCard({ repo, proposal, reload, onOpenIssue }) {
   const [wf, setWf] = useState(proposal.workflow || "full-build");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState(null);
+  // Ordered slices default to ONE epic (its ▶ Play runs the parts back-to-back). Untick to get flat
+  // issues instead — then every part needs its own Start and Merge.
+  const [asEpic, setAsEpic] = useState(true);
   const issues = proposal.issues || [];
   if (created) {
     return html`<div class="oprop oprop-done">
@@ -32,7 +35,7 @@ function ProposalCard({ repo, proposal, reload, onOpenIssue }) {
   }
   function create() {
     if (busy) return; setBusy(true);
-    api("/orch-handoff", { repo, workflow: wf, issues }).then((r) => {
+    api("/orch-handoff", { repo, workflow: wf, issues, ...(asEpic && proposal.epic ? { epic: proposal.epic } : {}) }).then((r) => {
       setCreated(r.created || []);
       toast("Created " + ((r.created || []).length) + " issue(s) in Planned");
       reload && reload();
@@ -46,6 +49,10 @@ function ProposalCard({ repo, proposal, reload, onOpenIssue }) {
         ${Object.keys(WF_LABEL).map((k) => html`<option key=${k} value=${k}>${WF_LABEL[k]} — ${WF_HINT[k]}</option>`)}
       </select>
     </div>
+    ${proposal.epic ? html`<label class="oprop-epic">
+      <input type="checkbox" checked=${asEpic} onChange=${(e) => setAsEpic(e.target.checked)}/>
+      <span>Group as one epic — <b>${proposal.epic}</b><span class="oprop-s"> · the parts run back-to-back from the epic's ▶ Play instead of you starting and merging each one</span></span>
+    </label>` : null}
     <ol class="oprop-list">
       ${issues.map((it, n) => html`<li key=${n}><span class="oprop-t">${it.title}</span>${it.scope ? html`<span class="oprop-s">${it.scope}</span>` : null}</li>`)}
     </ol>

@@ -14,12 +14,83 @@ import type { Provider } from "../db/providers.js";
 import { recallWiring, RECALL_PROMPT } from "./recall.js";
 
 export interface HandoffIssue { title: string; scope: string; route?: string }
-export interface HandoffProposal { workflow: string; issues: HandoffIssue[] }
+export interface HandoffProposal {
+  workflow: string;
+  issues: HandoffIssue[];
+  /** Set when the slices are ordered and dependent: the title of the parent EPIC to create them
+   *  under. An epic auto-advances (▶ Play starts the next sub-issue as each one merges), whereas
+   *  flat issues make the user start and merge every part by hand. */
+  epic?: string;
+}
 export interface OrchQuestion { options: string[]; multi: boolean }
 export interface OrchReply { reply: string; proposal: HandoffProposal | null; question: OrchQuestion | null }
 
 const VALID_WF = new Set(["quick-fix", "full-build", "plan-only", "split"]);
 const ORCH_ROLE = "orchestrator";
+
+/** Heading that marks the verbatim original request inside a generated issue body. Agents and the
+ *  reviewer look for exactly this string — keep the two in sync (see SPEC_GATE in pipeline.ts). */
+export const SPEC_ANCHOR_HEADING = "### SPEC — the original request (binding)";
+
+/**
+ * How to SHAPE the work, injected into every Orchestrator turn.
+ *
+ * Splitting is not free: each issue pays a fresh plan → dev → test → review pipeline, and every
+ * agent re-reads the repo from cold. A benchmark build split into 4 ordered issues cost ~4x the
+ * tokens of the same app built in one pass, and the tail issue spent ~190k tokens to move one file
+ * and write a README. So the default is ONE issue, and splitting has to earn itself.
+ */
+export const ROUTING_GUIDE = [
+  "## Choosing the shape of the work (this drives cost — get it right)",
+  "Every issue you propose pays a full plan → build → test → review pipeline, and each agent starts",
+  "cold. Splitting work that one agent could do in a single pass multiplies the cost with no gain, so",
+  "ONE issue is the default and a split must earn itself. Pick the cheapest shape that fits:",
+  "- **One `full-build` issue** — the default for a feature or a small greenfield app, even when it",
+  "  spans several files and layers. One agent holding the whole spec also drifts from it far less",
+  "  than several agents each holding a slice.",
+  "- **`quick-fix`** — a bug or a change of a file or two, where planning adds nothing.",
+  "- **Split into an EPIC with sub-issues** — only when the slices are genuinely independent (they",
+  "  touch disjoint files and could run in parallel), or the whole is too big for one run. Ordered,",
+  "  dependent slices belong in ONE epic, never as separate top-level issues: an epic auto-advances",
+  "  from one sub-issue to the next, whereas separate issues make the user start and merge each by hand.",
+  "  To create one, add an `epic: <parent title>` line to the handoff block alongside the issue lines —",
+  "  the parts then become its sub-issues. Use it whenever your parts are numbered or say \"then\"/\"after\".",
+  "- **`plan-only`** — the goal is genuinely unclear and exploration IS the deliverable.",
+  "Purely mechanical work — moving/renaming/deleting files — should not become its own agent issue.",
+  "Put it in an `ops` fenced block inside that issue's scope and the agency applies it with code",
+  "before any agent starts, for no tokens. One op per line, repo-relative paths only:",
+  "```ops",
+  "move routes/links.test.js -> test/links.test.js",
+  "delete src/old-helper.js",
+  "mkdir test",
+  "```",
+  "Only use ops for work with exactly one right answer. Anything needing judgement is the developer's.",
+  "State which shape you chose and why in one line of prose before the handoff block, so the user can",
+  "overrule you. When the choice is genuinely close, offer it as a `question` block instead of guessing.",
+].join("\n");
+
+/**
+ * The user's own words from the orchestrator chat, to be pinned onto every issue the handoff
+ * creates.
+ *
+ * Slicing a chat into issues is lossy: in a live benchmark the orchestrator silently dropped a
+ * required field and rewrote a response shape, and because every downstream role validated against
+ * the *sliced issue text*, four reviewers approved work that missed the spec. Carrying the request
+ * verbatim gives each agent — and the reviewer's gate — the actual goal to check against, not a
+ * paraphrase of it.
+ *
+ * Only `user` turns are kept (the orchestrator's own replies are the paraphrase we don't trust), and
+ * the result is capped so a long conversation can't blow up every issue body.
+ */
+export function specAnchor(repo: string, limit = 4000): string {
+  const said = listOrchThread(repo)
+    .filter((m) => m.role === "user")
+    .map((m) => m.text.trim())
+    .filter(Boolean);
+  if (!said.length) return "";
+  const joined = said.join("\n\n");
+  return joined.length > limit ? joined.slice(0, limit) + "\n\n…(truncated)" : joined;
+}
 
 /** Pull an optional `{agent: @x}` / `{workflow: @y}` route recommendation off an issue line. */
 function extractRoute(s: string): { scope: string; route?: string } {
@@ -34,10 +105,13 @@ export function parseHandoff(text: string): HandoffProposal | null {
   if (!m) return null;
   const lines = m[1].split("\n").map((l) => l.trim()).filter(Boolean);
   let workflow = "";
+  let epic = "";
   const issues: HandoffIssue[] = [];
   for (const line of lines) {
     const wf = line.match(/^workflow\s*:\s*(.+)$/i);
     if (wf) { workflow = wf[1].trim().toLowerCase().replace(/\s+/g, "-"); continue; }
+    const ep = line.match(/^epic\s*:\s*(.+)$/i);
+    if (ep) { epic = ep[1].trim(); continue; }
     const it = line.match(/^[-*]\s*\[(.+?)\]\s*(.*)$/);
     if (it) { const r = extractRoute(it[2]); issues.push({ title: it[1].trim(), scope: r.scope, ...(r.route ? { route: r.route } : {}) }); continue; }
     const bare = line.match(/^[-*]\s+(.+)$/);
@@ -45,7 +119,8 @@ export function parseHandoff(text: string): HandoffProposal | null {
   }
   if (!VALID_WF.has(workflow)) workflow = issues.length > 1 ? "split" : "full-build";
   if (!issues.length) return null;
-  return { workflow, issues };
+  // An "epic" of one is just an issue — don't wrap a single slice in a parent that adds a click.
+  return { workflow, issues, ...(epic && issues.length > 1 ? { epic } : {}) };
 }
 
 /** Strip the handoff block from the user-facing reply (the proposal is surfaced as a UI card). */
@@ -198,6 +273,7 @@ export async function runOrchestratorChat(repo: string, userText: string): Promi
         `The user just said:\n${userText}\n\n` +
         `Respond as the Orchestrator. Discuss and advise conversationally; only append a \`handoff\` block if the user is ready to create work. ` +
         `In the handoff block, RECOMMEND the route per issue: end each issue line with \`{workflow: @build}\` (or another workflow trigger) for multi-step work, or \`{agent: @dev}\` / \`{agent: @review}\` / another single agent when one specialist suffices.\n\n` +
+        ROUTING_GUIDE + "\n\n" +
         `When you ask the user to CHOOSE between discrete options, write the question in prose AND append a \`question\` fenced block so they can click instead of type — one option per line as a \`- \` bullet, ` +
         `and a \`multi: true\` line only when several may be picked at once (omit it for a single pick). Example:\n` +
         "```question\nmulti: false\n- Pivot to Flutter\n- Keep Expo\n- Something else\n```\n" +
