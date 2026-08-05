@@ -5,8 +5,9 @@
 import { html } from "/web/vendor/standalone.mjs";
 import { Icon } from "../../atoms/Icon.js";
 import { RepoPicker } from "../../molecules/RepoPicker.js";
+import { RepoCredentials } from "../RepoCredentials.js";
 
-export function ReposSection({ repos, reload, auto, autoRepos, setAuto, repoBranches }) {
+export function ReposSection({ repos, reload, auto, autoRepos, setAuto, repoBranches, repoCreds }) {
   const gpill = (kind) => { const on = ((auto || {})[kind] || "") === "on"; const tip = "Auto-" + kind + " for all repos — " + (on ? "ON" : "OFF"); return html`<button class=${"apill " + (on ? "on" : "off")} aria-label=${tip} data-tip=${tip} onClick=${() => setAuto(kind, on ? "off" : "on")}><${Icon} name=${kind === "resume" ? "refresh" : "merge"} size=${12}/> <span class="apill-label">${kind}</span></button>`; };
   return html`<div>
     <div class="sec">Repositories</div>
@@ -16,5 +17,6 @@ export function ReposSection({ repos, reload, auto, autoRepos, setAuto, repoBran
       ${gpill("resume")}${gpill("merge")}
     </div>
     <${RepoPicker} repos=${repos} reload=${reload} showAuto=${true} autoRepos=${autoRepos} setAuto=${setAuto} repoBranches=${repoBranches || {}} filterable=${true}/>
+    <${RepoCredentials} repos=${repos} repoCreds=${repoCreds || {}} reload=${reload}/>
   </div>`;
 }

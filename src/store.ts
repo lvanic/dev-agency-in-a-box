@@ -13,7 +13,7 @@ import { getSetting, setSetting, setSecretSetting, getSecretSetting } from "./db
 
 // Re-export the connection-layer symbols the rest of the app imports from store.ts (back-compat).
 export { getDb, now, migrateIssueStates } from "./db/connection.js";
-export { getSetting, setSetting, setSecretSetting, getSecretSetting } from "./db/settings.js";
+export { getSetting, setSetting, setSecretSetting, getSecretSetting, setRepoCreds, getRepoCreds } from "./db/settings.js";
 export { addEpicChild, updateEpicChild, listEpicChildren, listEpicParents, epicParentsOf, epicsByParent, getEpicMeta, setEpicMeta } from "./db/epic_tables.js";
 export type { EpicChild } from "./db/epic_tables.js";
 export { getThreadCursor, setThreadCursor } from "./db/thread_cursor.js";

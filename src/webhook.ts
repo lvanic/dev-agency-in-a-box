@@ -32,7 +32,7 @@ async function resolveRunTarget(repo: string, number: number, target: string | n
 import { versionInfo } from "./version.js";
 import { synth, TTS_ROLES } from "./tts.js";
 import { startDeviceFlow, pollDeviceToken, fetchGitHubUser } from "./github-oauth.js";
-import { githubOAuthClientId, githubOAuthToken, githubIdentity } from "./creds.js";
+import { githubOAuthClientId, githubOAuthToken, githubIdentity, repoCredentialKeys } from "./creds.js";
 import { binaryAvailable } from "./runners/registry.js";
 import { installSpec, installCli, RUNNER_PACKAGES } from "./runners/install.js";
 import { allToolchains, getToolchain, toolchainStatus, isInstalling, listToolchainRequests, installToolchain, toolchainsDir, sharedBinDir, toolchainProgress, subscribeToolchains, addCustomToolchain, removeCustomToolchain, reconcileStuckInstalls, repoToolset, pinRepoToolchain } from "./toolchains.js";
@@ -45,7 +45,7 @@ import { afterMerge } from "./merge_hooks.js";
 import { activeClaims } from "./locks.js";
 import { authEnabled, userFromReq, setSessionCookie, clearSessionCookie, parseCookies, SESSION_COOKIE, verifyRecoveryKey } from "./auth.js";
 import { OPS_SETTINGS, opsSettingsValues, sBool } from "./settings.js";
-import { getSecretSetting, setSecretSetting, getUserSecretStatus } from "./store.js";
+import { getSecretSetting, setSecretSetting, getUserSecretStatus, setRepoCreds } from "./store.js";
 import { masterKeyConfigured } from "./crypto.js";
 import { ghBotToken, ghUserToken, claudeToken, anthropicApiKey } from "./creds.js";
 import { providerAuth } from "./agents/provider-auth.js";
@@ -651,6 +651,10 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
                   production: getSetting(`repo_production.${r}`) || "",
                 }]),
               ),
+              // Per-repo credentials (issue #263): only key NAMES + masked values, never plaintext.
+              repoCreds: sessionUser && sessionUser.role === "admin"
+                ? Object.fromEntries(effectiveRepos(cfg).map((r) => [r, repoCredentialKeys(r)]))
+                : {},
               active: getActive(),
               inflight: inFlightKeys(),
               rateLimited: listRateLimited(),
@@ -1202,11 +1206,11 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
     }
 
     // Dashboard actions (auth required), not GitHub webhooks.
-    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/vault-save", "/vault-delete", "/vault-compress", "/app-run", "/app-stop", "/promote", "/repo-branches", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/create-repo", "/epic-play", "/epic-pause", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/install-toolchain", "/toolchain-add", "/toolchain-remove", "/repo-toolset", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
+    if (["/archive", "/comment", "/comment-edit", "/run-checks", "/merge", "/close", "/close-not-planned", "/create-pr", "/delete", "/resume", "/stop", "/hold", "/fix", "/auto", "/start", "/start-children", "/new-issue", "/approve", "/audit", "/settings", "/agent-save", "/agent-revert", "/vault-save", "/vault-delete", "/vault-compress", "/app-run", "/app-stop", "/promote", "/repo-branches", "/repo-creds", "/upload-image", "/upload-file", "/add-repo", "/remove-repo", "/create-repo", "/epic-play", "/epic-pause", "/models", "/discover-models", "/invite-create", "/user-secret", "/onboarded", "/set-password", "/test-claude", "/model-override", "/issue-workflow", "/issue-provider", "/issue-agent-model", "/issue-use-fallback", "/issue-budget", "/agent-def-save", "/agent-def-delete", "/skill-save", "/skill-delete", "/skill-import", "/hook-save", "/hook-delete", "/analyzer-run", "/refresh", "/refresh-issue", "/cancel", "/reset-issue", "/install-cli", "/install-toolchain", "/toolchain-add", "/toolchain-remove", "/repo-toolset", "/gh-connect", "/gh-connect-poll", "/gh-disconnect", "/workflow-save", "/workflow-delete", "/default-workflow", "/orch-chat", "/orch-handoff", "/orch-clear", "/deploy-now"].includes(path)) {
       const actor = userFromReq(req);
       if (!actor) return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"auth required"}');
       void readBody(req).then(async (body) => {
-        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; priceOverrides?: Record<string, { in?: unknown; out?: unknown } | null>; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string; raw?: string; text?: string; hints?: string[]; target?: string; staging?: string; production?: string } = {};
+        let p: { repo?: string; number?: number; commentId?: number; body?: string; title?: string; role?: string; agent?: string; path?: string; content?: string; windowHours?: number; budget?: number; anchorNow?: boolean; anchor?: string; pctNow?: number; tracker?: string; agentDef?: Partial<AgentDef> & { name: string }; agentName?: string; workflow?: { id: string; name: string; trigger?: string; steps?: unknown[]; gates?: unknown[]; hooks?: unknown[] }; workflowId?: string; skill?: Partial<Skill> & { name: string }; skillName?: string; hook?: { id?: number; target: string; phase: "pre" | "post"; command: string; enabled?: boolean }; hookId?: number; dataUrl?: string; name?: string; providers?: Provider[]; roleModels?: Record<string, { providerId: string; model: string }>; globalModel?: { providerId: string; model: string } | null; fallbackChain?: Array<{ providerId: string; model: string }>; autoSwitchOnLimit?: boolean; priceOverrides?: Record<string, { in?: unknown; out?: unknown } | null>; model?: { providerId: string; model: string } | null; agentModels?: Record<string, string>; newIssueDefault?: string; kind?: string; value?: string; skipArchitect?: string; gitnexus?: string; maxTokensPerRun?: number; maxReviseRounds?: number; auditThreshold?: number; start?: boolean; email?: string; key?: string; ops?: Record<string, string | number | boolean>; agentRunner?: string; agentCliCommand?: string; webhookSecret?: string; analyzerUrl?: string; avatars?: string; source?: string; id?: string; discover?: boolean; visibility?: string; description?: string; raw?: string; text?: string; hints?: string[]; target?: string; staging?: string; production?: string; creds?: string } = {};
         try {
           p = JSON.parse(body.toString("utf8"));
         } catch {
@@ -1726,6 +1730,16 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           if (typeof p.staging === "string") setSetting(`repo_staging.${repo}`, p.staging.trim());
           if (typeof p.production === "string") setSetting(`repo_production.${repo}`, p.production.trim());
           return ok();
+        }
+        if (path === "/repo-creds") {
+          // Per-repo credentials (issue #263): save the pasted `KEY=value` block encrypted at rest,
+          // then return ONLY the key names + masked values (never the plaintext, never logged). The
+          // raw creds are injected into agent runs' env at run time — the model never sees our store.
+          if (actor?.role !== "admin") return res.writeHead(403).end(JSON.stringify({ error: "admin only" }));
+          if (!repo) return res.writeHead(400).end(JSON.stringify({ error: "repo required" }));
+          if (typeof p.creds !== "string") return res.writeHead(400).end(JSON.stringify({ error: "creds required" }));
+          setRepoCreds(repo, p.creds);
+          return ok(JSON.stringify({ ok: true, keys: repoCredentialKeys(repo) }));
         }
         if (path === "/app-stop") {
           if (!repo || !number) return res.writeHead(400).end("{}");

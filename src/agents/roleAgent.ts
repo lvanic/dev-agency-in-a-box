@@ -24,7 +24,7 @@ import { loadBudget } from "../budget.js";
 import { gitnexusWiring, GITNEXUS_PROMPT } from "../gitnexus.js";
 import { recallWiring, RECALL_PROMPT } from "./recall.js";
 import { vaultToolWiring } from "./vaultTool.js";
-import { claudeToken, anthropicApiKey, ghBotToken, githubIdentity } from "../creds.js";
+import { claudeToken, anthropicApiKey, ghBotToken, githubIdentity, repoCredentials } from "../creds.js";
 import { noreplyEmail } from "../github-oauth.js";
 import { providerAuth } from "./provider-auth.js";
 import { registerRun, isStopRequested, takeSteer } from "../abort.js";
@@ -380,6 +380,10 @@ export async function runRole(role: RoleName, input: RoleRunInput): Promise<Role
       runEnv.GIT_COMMITTER_EMAIL = email;
     }
   }
+  // Per-repo credentials (issue #263): decrypt THIS repo's stored secrets and inject them as env
+  // vars for the agent's own use (API keys, logins its code/tests need). The model sees the KEY
+  // NAMES via the process env, never our storage — and we never log the values or write a .env file.
+  for (const [k, v] of Object.entries(repoCredentials(input.repo))) runEnv[k] = v;
   const budget = loadBudget();
   // Per-role cap, never exceeding the global ceiling. Keeps Opus plans from ballooning.
   const maxTurns = Math.min(def.maxTurns || budget.maxTurnsPerRun, budget.maxTurnsPerRun);

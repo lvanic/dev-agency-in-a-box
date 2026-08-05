@@ -46,7 +46,7 @@ export function SettingsShell({ data, onClose, reload, section: initial, openWor
         ${section === "general" ? html`<${GeneralSection} data=${data} reload=${reload} admin=${admin}/>` : null}
         ${section === "models" ? html`<${ModelsSection} reload=${reload} secretKeys=${data.secretKeys || []}/>` : null}
         ${section === "github" ? html`<${GithubSection} secretKeys=${data.secretKeys || []} github=${data.github} reload=${reload}/>` : null}
-        ${section === "repos" ? html`<${ReposSection} repos=${repos} reload=${reload} auto=${auto} autoRepos=${autoRepos} setAuto=${setAuto} repoBranches=${data.repoBranches || {}}/>` : null}
+        ${section === "repos" ? html`<${ReposSection} repos=${repos} reload=${reload} auto=${auto} autoRepos=${autoRepos} setAuto=${setAuto} repoBranches=${data.repoBranches || {}} repoCreds=${data.repoCreds || {}}/>` : null}
         ${section === "environments" ? html`<${EnvironmentsSection} admin=${admin}/>` : null}
         ${section === "memory" ? html`<${MemorySection}/>` : null}
         ${section === "team" && admin ? html`<${TeamSection} users=${data.users || []} webhookSecretSet=${data.webhookSecretSet} reload=${reload}/>` : null}

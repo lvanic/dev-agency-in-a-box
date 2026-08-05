@@ -41,3 +41,16 @@ export function getSecretSetting(key: string): string | null {
   const v = getSetting(`secret.${key}`);
   return v ? tryDecrypt(v) : null;
 }
+
+/**
+ * Per-repo credentials (issue #263). The raw `KEY=value` block a human pastes in Settings is
+ * stored ENCRYPTED at rest, reusing the same secret/crypto path as every other secret — one key
+ * per repo (`repo_creds.<owner/name>`). Repo-scoped only; never a global set. Parsing + masking
+ * live in the logic layer (creds.ts) so this stays a thin store.
+ */
+export function setRepoCreds(repo: string, rawText: string): void {
+  setSecretSetting(`repo_creds.${repo}`, rawText || "");
+}
+export function getRepoCreds(repo: string): string | null {
+  return getSecretSetting(`repo_creds.${repo}`);
+}

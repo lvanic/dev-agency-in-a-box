@@ -4,7 +4,7 @@
  * per-user/per-repo with the rest of task 28.) Read live so setting a token in the dashboard takes
  * effect without a redeploy.
  */
-import { listUsers, getUserSecret } from "./store.js";
+import { listUsers, getUserSecret, getRepoCreds } from "./store.js";
 import { sStr } from "./settings.js";
 
 /**
@@ -71,6 +71,54 @@ export function anthropicApiKey(): string {
 }
 export function ghOwner(): string {
   return sStr("github_owner", "GITHUB_OWNER", "");
+}
+
+/**
+ * Per-repo credentials (issue #263). A human pastes secrets as `KEY=value` lines in Settings; they
+ * are stored encrypted (see db/settings.setRepoCreds) and injected into an agent run's ENV only at
+ * run time — so the model can use them (by name) without ever seeing our storage, and we never
+ * write a `.env` file or log a value.
+ *
+ * Pure parser: one `KEY=value` per line. Blank lines and `#` comments are ignored. A leading
+ * `export ` is stripped (so pasting a shell-style `.env` works). Surrounding quotes on the value
+ * are removed and whitespace trimmed. Keys must be valid env names ([A-Za-z_][A-Za-z0-9_]*);
+ * malformed lines are skipped rather than throwing. Later lines win on a duplicate key.
+ */
+export function parseEnvLines(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!text) return out;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const body = line.startsWith("export ") ? line.slice(7).trim() : line;
+    const eq = body.indexOf("=");
+    if (eq <= 0) continue;
+    const key = body.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let val = body.slice(eq + 1).trim();
+    if (val.length >= 2 && ((val[0] === '"' && val.endsWith('"')) || (val[0] === "'" && val.endsWith("'")))) {
+      val = val.slice(1, -1);
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
+/** Mask a secret value for display — never reveals the plaintext (fixed-width bullets by length). */
+export function maskCredValue(value: string): string {
+  const n = Math.min(8, Math.max(4, value.length));
+  return "•".repeat(n);
+}
+
+/** The decrypted per-repo credential env for a run. Values are NEVER logged. Repo-scoped only. */
+export function repoCredentials(repo: string): Record<string, string> {
+  if (!repo) return {};
+  return parseEnvLines(getRepoCreds(repo) || "");
+}
+
+/** Key NAMES + masked placeholders for the dashboard — never the plaintext values. */
+export function repoCredentialKeys(repo: string): Array<{ key: string; masked: string }> {
+  return Object.entries(repoCredentials(repo)).map(([key, value]) => ({ key, masked: maskCredValue(value) }));
 }
 /** True once we have a GitHub token to act with — gates all GitHub work + scanning. */
 export function githubReady(): boolean {
