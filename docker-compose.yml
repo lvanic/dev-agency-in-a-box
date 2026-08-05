@@ -20,12 +20,11 @@
 #
 # ANALYZER_API_KEY: the agency AUTO-GENERATES + persists a strong key on first boot if this is left
 # unset (mirrors MASTER_KEY — see src/analyzerKey.ts), so the `agency` service alone needs zero
-# config. The vendored `analyzer` service below is a SEPARATE container with no shared DB/volume,
-# so it can't see that generated value on its own — it only gets one if YOU set ANALYZER_API_KEY in
-# your own `.env` (shared by both services here). If you leave it unset, copy the agency's
-# auto-generated key from Settings → General → Process Analyzer into your `.env` as
-# ANALYZER_API_KEY, then restart the `analyzer` service so it picks it up. No checked-in secret
-# ships in this file anymore — see COOLIFY.md / analyzer/README.md for the full rundown.
+# config. For the BUNDLED analyzer below this is now also zero-config: the agency mirrors its key to
+# a file on the shared `analyzer-key` volume (ANALYZER_KEY_FILE), and the sidecar reads it from the
+# same volume (AGENCY_KEY_FILE) — no hand-copying. Setting ANALYZER_API_KEY explicitly still wins
+# for both (and is the only option when you run the analyzer as its OWN Coolify resource, where the
+# volume isn't shared). No checked-in secret ships in this file — see COOLIFY.md / analyzer/README.md.
 services:
   agency:
     build: .
@@ -50,9 +49,12 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}           # e.g. "Dev Agency <no-reply@yourdomain.com>"
       SMTP_SECURE: ${SMTP_SECURE:-}       # true|false to override (defaults: true on 465, else false)
       # Enables the read-only /telemetry + /analyzer-run APIs the `analyzer` service below calls.
-      # Leave unset to auto-generate (recommended); set it to match AGENCY_API_KEY below only if you
-      # run the vendored `analyzer` service (see the note above).
+      # Leave unset to auto-generate (recommended) — the bundled sidecar picks it up via the shared
+      # volume regardless. Pin a value only to force a specific key across both services.
       ANALYZER_API_KEY: ${ANALYZER_API_KEY:-}
+      # Where the agency mirrors its (auto-generated) analyzer key so the bundled sidecar can read it
+      # with zero config — see the `analyzer-key` shared volume below. Harmless if the sidecar is off.
+      ANALYZER_KEY_FILE: /run/analyzer-key/key
       # Other optional overrides — uncomment only to pin a value:
       # MASTER_KEY: ${MASTER_KEY:-}       # pin the secrets-encryption key (else auto-generated +
       #                                   # persisted at /app/data/.masterkey — keep the volume!)
@@ -63,6 +65,8 @@ services:
       # language toolchains installed from Settings → Environments (Flutter, Rust) all live here —
       # keep it! One volume = everything survives a redeploy. No separate toolchain volume needed.
       - agency-data:/app/data
+      # Shared key drop so the bundled analyzer sidecar auto-picks up the auto-generated key.
+      - analyzer-key:/run/analyzer-key
 
   analyzer:
     build: ./analyzer
@@ -73,12 +77,16 @@ services:
     environment:
       # Internal compose network — no public URL/TLS needed for this hop (see analyzer/README.md).
       AGENCY_URL: http://agency:3000
-      # Must match the agency's ANALYZER_API_KEY. Since the agency auto-generates its own if you
-      # leave that unset, this sidecar starts with an EMPTY key until you copy the generated value
-      # (Settings → General → Process Analyzer, on the agency side) into your `.env` for both.
+      # Zero-config in this bundled setup: left unset, the sidecar reads the key the agency mirrored
+      # onto the shared `analyzer-key` volume (AGENCY_KEY_FILE below). An explicit ANALYZER_API_KEY
+      # still wins for both services if you'd rather pin one.
       AGENCY_API_KEY: ${ANALYZER_API_KEY:-}
-    # No volumes, no LLM credential — telemetry + the analysis pass itself both go over HTTP to the
-    # agency; cursor is in-memory (see analyzer/README.md).
+      AGENCY_KEY_FILE: /run/analyzer-key/key
+    volumes:
+      # Read-only view of the same volume the agency writes the key to.
+      - analyzer-key:/run/analyzer-key:ro
+    # No LLM credential — telemetry + the analysis pass itself both go over HTTP to the agency.
 
 volumes:
   agency-data:
+  analyzer-key:

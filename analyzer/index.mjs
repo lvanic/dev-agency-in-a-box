@@ -27,9 +27,25 @@
  */
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 const AGENCY_URL = (process.env.AGENCY_URL || process.env.SERVICE_URL_AGENCY || "").trim();
-const AGENCY_API_KEY = (process.env.AGENCY_API_KEY || "").trim();
+// The shared key. Explicit AGENCY_API_KEY wins (standalone deploy). Otherwise, in the bundled
+// docker-compose setup, the agency mirrors its auto-generated key to a file on a volume we also
+// mount (AGENCY_KEY_FILE) — so this sidecar works with ZERO config and nobody has to hand-copy a
+// key. Re-read until we get one (the agency writes it at boot, but depends_on only waits for the
+// port, so the file can lag a moment); cache the first non-empty value.
+const AGENCY_KEY_FILE = (process.env.AGENCY_KEY_FILE || "").trim();
+let _keyCache = "";
+function agencyKey() {
+  if (_keyCache) return _keyCache;
+  const env = (process.env.AGENCY_API_KEY || "").trim();
+  if (env) return (_keyCache = env);
+  if (AGENCY_KEY_FILE) {
+    try { const k = readFileSync(AGENCY_KEY_FILE, "utf8").trim(); if (k) return (_keyCache = k); } catch { /* not written yet */ }
+  }
+  return "";
+}
 const PORT = Number(process.env.PORT) || 3000;
 let INTERVAL_MS = 6 * 3600_000; // refined from the agency's config on the first pass
 const base = () => (AGENCY_URL.startsWith("http") ? AGENCY_URL : `https://${AGENCY_URL}`);
@@ -41,9 +57,10 @@ let lastDeploy = { ok: false };
 let lastRunAt = null;
 
 async function fetchTelemetry(sinceIso) {
-  if (!AGENCY_URL || !AGENCY_API_KEY) throw new Error("AGENCY_URL / AGENCY_API_KEY not set");
+  const key = agencyKey();
+  if (!AGENCY_URL || !key) throw new Error("AGENCY_URL / AGENCY_API_KEY not set (and no readable AGENCY_KEY_FILE yet)");
   const res = await fetch(`${base()}/telemetry?since=${encodeURIComponent(sinceIso)}`, {
-    headers: { Authorization: `Bearer ${AGENCY_API_KEY}` },
+    headers: { Authorization: `Bearer ${key}` },
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`telemetry HTTP ${res.status}`);
@@ -73,7 +90,7 @@ function digest(t) {
 async function llm(prompt) {
   const res = await fetch(`${base()}/analyzer-analyze`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${AGENCY_API_KEY}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${agencyKey()}`, "Content-Type": "application/json" },
     body: JSON.stringify({ prompt }),
     signal: AbortSignal.timeout(120_000), // a full analysis pass can take a while
   });
@@ -87,7 +104,7 @@ async function postProposal(title, body) {
   try {
     const r = await fetch(`${base()}/analyzer-issue`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${AGENCY_API_KEY}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${agencyKey()}`, "Content-Type": "application/json" },
       body: JSON.stringify({ title, body }),
       signal: AbortSignal.timeout(20_000),
     });
@@ -144,10 +161,11 @@ async function pass(force = false) {
 }
 
 function bearerOk(req) {
-  if (!AGENCY_API_KEY) return false;
+  const key = agencyKey();
+  if (!key) return false;
   const hdr = (req.headers["authorization"] || "").toString();
   const got = hdr.startsWith("Bearer ") ? hdr.slice(7).trim() : "";
-  const a = Buffer.from(got), b = Buffer.from(AGENCY_API_KEY);
+  const a = Buffer.from(got), b = Buffer.from(key);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 

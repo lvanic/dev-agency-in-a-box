@@ -26,9 +26,9 @@ Merging into this repo redeploys the container (see above) — but the agency ma
 
 **The Process Analyzer's key auto-generates too.** `ANALYZER_API_KEY` used to ship as a real, checked-in default in `docker-compose.yml` so the vendored `analyzer` sidecar worked out of the box. It no longer does: if you leave `ANALYZER_API_KEY` unset, the agency generates a strong random key on first boot and persists it in the database (same pattern as `MASTER_KEY`, just DB-backed instead of file-backed since `MASTER_KEY` is already available to encrypt it). That's enough for the agency's own `/telemetry` + `/analyzer-issue` APIs.
 
-If you also run the **vendored** `analyzer` service from this repo's `docker-compose.yml`, it's a separate container with no shared database, so it can't see that auto-generated value on its own. Either:
-- set `ANALYZER_API_KEY` yourself in Coolify's environment for this resource (used by both services), or
-- leave it unset, then after first boot open **Settings → General → Process Analyzer** on the agency, reveal the generated key, and set it as `ANALYZER_API_KEY` in Coolify for both services, then redeploy.
+The **vendored** `analyzer` service from this repo's `docker-compose.yml` is now zero-config: the agency mirrors that key to a file on a shared `analyzer-key` volume and the sidecar reads it from the same volume, so you don't have to copy anything — leave `ANALYZER_API_KEY` unset and deploy. (Setting `ANALYZER_API_KEY` explicitly still works and overrides the shared file for both services.)
+
+If instead you deploy `dev-agency-analyzer` as its **own** Coolify resource, the volume isn't shared — set the key explicitly there: reveal it at **Settings → General → Process Analyzer** on the agency and set it as `ANALYZER_API_KEY` (agency) / `AGENCY_API_KEY` (analyzer), or pin your own on both before first boot.
 
 A **standalone** `dev-agency-analyzer` deployment always needs this manual copy step — it never shared a database with the agency in the first place.
 

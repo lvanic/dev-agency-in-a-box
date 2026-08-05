@@ -61,14 +61,16 @@ The root `docker-compose.yml`'s `analyzer` service builds from this directory an
 `agency` service over the compose network (`AGENCY_URL=http://agency:3000` — no public URL or TLS
 needed for that hop). `ANALYZER_API_KEY` no longer ships prefilled in the compose file — the agency
 **auto-generates and persists** a strong key on first boot if you leave it unset (same pattern as
-`MASTER_KEY`; see `src/analyzerKey.ts` in the agency repo). This sidecar is a separate container with
-no shared database, so it can't see that generated value by itself:
+`MASTER_KEY`; see `src/analyzerKey.ts` in the agency repo).
 
-- **Easiest:** open the agency's **Settings → General → Process Analyzer**, reveal the generated
-  key, and set it as `ANALYZER_API_KEY` in your `.env` (both services read the same env var — the
-  agency as `ANALYZER_API_KEY`, this sidecar as `AGENCY_API_KEY`) — then restart both.
-- Or set your own `ANALYZER_API_KEY` (`openssl rand -hex 32`) in `.env` *before* first boot so the
-  agency never needs to generate one.
+- **Bundled compose (zero config):** the agency mirrors that auto-generated key to a file on a
+  shared `analyzer-key` volume (`ANALYZER_KEY_FILE`), and this sidecar reads it from the same volume
+  (`AGENCY_KEY_FILE`). Nothing to copy — just `docker compose up`. The sidecar re-reads the file
+  until it appears, so a slightly-late first write only delays the first pass, never breaks it.
+- **Standalone (own Coolify resource):** the volume isn't shared, so set the key explicitly. Either
+  reveal it at **Settings → General → Process Analyzer** and set it as `ANALYZER_API_KEY` on the
+  agency + `AGENCY_API_KEY` here, or set your own `ANALYZER_API_KEY` (`openssl rand -hex 32`) on both
+  *before* first boot. An explicit key always wins over the shared file.
 
 **Before it can produce reports**, also assign a model to the "Analyzer" role in the agency's
 Settings → Models — that's the only other setup step.

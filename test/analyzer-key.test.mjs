@@ -2,7 +2,7 @@
 // on first boot instead of trusting the retired checked-in docker-compose.yml default.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,7 @@ const {
   analyzerApiKey,
   isUntrustedAnalyzerKey,
   RETIRED_DEFAULT_ANALYZER_KEY,
+  mirrorAnalyzerKeyToShare,
   _resetAnalyzerApiKeyCacheForTests,
 } = await import("../dist/analyzerKey.js");
 const { getSecretSetting } = await import("../dist/db/settings.js");
@@ -21,6 +22,7 @@ const { getSecretSetting } = await import("../dist/db/settings.js");
 test.beforeEach(() => {
   _resetAnalyzerApiKeyCacheForTests();
   delete process.env.ANALYZER_API_KEY;
+  delete process.env.ANALYZER_KEY_FILE;
 });
 
 test("isUntrustedAnalyzerKey rejects empty and the retired checked-in default", () => {
@@ -62,4 +64,18 @@ test("the in-process cache short-circuits repeated calls", () => {
   const k1 = analyzerApiKey();
   const k2 = analyzerApiKey();
   assert.equal(k1, k2);
+});
+
+test("mirrorAnalyzerKeyToShare writes the resolved key to ANALYZER_KEY_FILE (world-readable)", () => {
+  const p = join(mkdtempSync(join(tmpdir(), "keyshare-")), "sub", "key"); // dir doesn't exist yet
+  process.env.ANALYZER_KEY_FILE = p;
+  mirrorAnalyzerKeyToShare();
+  assert.equal(readFileSync(p, "utf8"), analyzerApiKey()); // exact key, no trailing newline
+  assert.equal(statSync(p).mode & 0o777, 0o644); // readable by a sidecar running as another UID
+});
+
+test("mirrorAnalyzerKeyToShare is a no-op when ANALYZER_KEY_FILE is unset (standalone)", () => {
+  // No path set → must not throw and must not create anything; nothing to assert but the absence
+  // of an error (a failed mirror must never hold up boot).
+  assert.doesNotThrow(() => mirrorAnalyzerKeyToShare());
 });

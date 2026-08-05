@@ -44,6 +44,7 @@ import {
   type Issue,
 } from "./github.js";
 import { seedAdmin, resetAdminPassword } from "./auth.js";
+import { mirrorAnalyzerKeyToShare } from "./analyzerKey.js";
 import { sNum } from "./settings.js";
 import { githubReady, ghUserToken, ghBotToken } from "./creds.js";
 import { decideThreadAction } from "./route.js";
@@ -1555,6 +1556,7 @@ async function main(): Promise<void> {
   // now-dead legacy learned-doc DB overrides (Phase 3) — ordered after the migration reads them.
   void migrateLearnedToVault().then(() => purgeLegacyLearnedOverrides());
   resetAdminPassword(); // forgot-password recovery via RESET_ADMIN_PASSWORD env (no-op if unset)
+  mirrorAnalyzerKeyToShare(); // share the auto-gen key with a bundled analyzer sidecar (no-op if ANALYZER_KEY_FILE unset)
   startAutoResume(cfg);
   startAutoMode(cfg);
   startPreviewSweeper();

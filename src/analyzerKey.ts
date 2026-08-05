@@ -22,6 +22,8 @@
  * analyzer/README.md.
  */
 import { randomBytes } from "node:crypto";
+import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { getSecretSetting, setSecretSetting } from "./store.js";
 
 /** The literal that used to be checked into docker-compose.yml. Never trust this as a real secret. */
@@ -55,6 +57,31 @@ export function analyzerApiKey(): string {
       "to copy it into a standalone or vendored analyzer sidecar).",
   );
   return (cached = gen);
+}
+
+/**
+ * Mirror the resolved key to a file on a shared volume so the BUNDLED analyzer sidecar (same
+ * docker-compose) can read it with zero config — no hand-copying the auto-generated key into an env
+ * var. Best-effort: a no-op unless ANALYZER_KEY_FILE points somewhere writable, and never throws
+ * (the sidecar is optional, and a failed mirror must never hold up boot). Standalone deployments
+ * leave ANALYZER_KEY_FILE unset and keep using the env var as before.
+ */
+export function mirrorAnalyzerKeyToShare(): void {
+  const p = process.env.ANALYZER_KEY_FILE?.trim();
+  if (!p) return;
+  try {
+    const key = analyzerApiKey();
+    let cur = "";
+    try { cur = readFileSync(p, "utf8").trim(); } catch { /* not written yet */ }
+    if (cur === key) return;
+    mkdirSync(dirname(p), { recursive: true });
+    // 0o644, not 0o600: the sidecar container may run as a different UID and must still read it.
+    // Safe here — this path is an INTERNAL compose volume, never mounted anywhere public.
+    writeFileSync(p, key, { mode: 0o644 });
+    console.log("[agency] mirrored ANALYZER_API_KEY to shared file for the bundled analyzer sidecar:", p);
+  } catch (e) {
+    console.warn("[agency] couldn't mirror ANALYZER_API_KEY to shared file:", (e as Error).message);
+  }
 }
 
 /** Test-only: drop the in-process cache so a test can re-resolve after changing env/DB state. */
