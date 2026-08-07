@@ -68,6 +68,10 @@ export const OPS_SETTINGS = [
   // can tell "never touched" from "deliberately cleared".
   { key: "upstream_contrib_enabled", env: "UPSTREAM_CONTRIB_ENABLED", type: "bool", def: false, label: "Contribute generic improvements upstream" },
   { key: "upstream_repo", env: "UPSTREAM_REPO", type: "str", def: "ArneNostitz/dev-agency", label: "Upstream repo (blank = disabled)" },
+  // Lazy Julian Mode (EXPERIMENTAL, src/lazy.ts): full autopilot — the Orchestrator approves, orders,
+  // answers, and merges. Off by default; turning it on removes every human gate at once.
+  { key: "lazy_mode", env: "LAZY_MODE", type: "bool", def: false, label: "Lazy Julian Mode (experimental)" },
+  { key: "lazy_interval_seconds", env: "LAZY_INTERVAL_SEC", type: "num", def: 180, label: "Lazy Julian Mode tick (seconds)" },
 ] as const;
 
 /** Read every ops setting's effective value (for the dashboard to render the form). */

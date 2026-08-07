@@ -71,6 +71,7 @@ import { runChecks, baselineFailures, parseDiscoveredChecks, rememberChecks } fr
 import { decideNext, type ModelHint } from "./orchestrator.js";
 import { withStatus, setBlocked, type BlockedReason } from "./state.js";
 import { TOOLCHAINS, recordToolchainRequest, installToolchain, isToolchainReady, isInstalling } from "./toolchains.js";
+import { lazyAutoApprove } from "./lazy.js";
 
 /**
  * Run the project's checks the cheap way: deterministic command runner first (zero tokens), and only
@@ -891,6 +892,13 @@ async function runDeveloperPipeline(
     proposal = `${decision.body}\n\n---\n\n### 🏛 Technical plan (Architect)\n\n${arch.text}`;
   }
   recordPlan(repo, issue.number, proposal);
+  // Lazy Julian Mode: the sign-off gate is the Orchestrator's call, not the human's — post the plan
+  // for the record and keep going. (src/lazy.ts; the mode is off by default.)
+  if (lazyAutoApprove()) {
+    await say(repo, issue.number, "planner", `**Plan — building it now** (Lazy Julian Mode: no sign-off gate).\n\n${proposal}`);
+    await build(repo, issue, workdir, proposal, thread);
+    return;
+  }
   await say(repo, issue.number, "planner", `**Larger change — quick sign-off?**\n\n${proposal}`);
   await pause(repo, issue, "awaitingApproval");
   console.log(`[agency] ${repo} #${issue.number} -> awaiting approval.`);
@@ -929,6 +937,14 @@ async function runSpecialist(
     }
     // Post the plan and keep the conversation open — reply to refine, or "ok" to accept.
     recordPlan(repo, issue.number, decision.body);
+    // Lazy Julian Mode: don't park a plan-only issue on a human 👍. Deliver it as reviewed work; the
+    // Orchestrator's autopilot decides what happens to it next (route it to a build, or close it).
+    if (lazyAutoApprove()) {
+      if (await maybeDecompose(repo, issue, decision.body)) return;
+      await say(repo, issue.number, "planner", `**Plan**\n\n${decision.body}`);
+      recordIssueStatus(repo, issue.number, withStatus("review"));
+      return;
+    }
     await say(repo, issue.number, "planner", `**Plan**\n\n${decision.body}`);
     recordIssueStatus(repo, issue.number, setBlocked(withStatus("planned"), "awaitingApproval"));
     return;
@@ -1431,11 +1447,16 @@ ${stepFollowUpNote}` : ""}${handoffBlock(repo, issue.number, stepPhase, { br: br
     let route = "continue";
     if (gate && (await evalGate(gate.condition, repo, issue, workdir, branch))) {
       if (gate.condition === "humanApproval") {
-        recordIssueStatus(repo, issue.number, setBlocked(withStatus("planned"), "awaitingApproval"));
-        await say(repo, issue.number, role, "⏸ **Approval needed** to continue — press **Approve** on the dashboard.");
-        return;
+        // Lazy Julian Mode: a human-approval gate is the Orchestrator's to clear — carry on.
+        if (lazyAutoApprove()) {
+          await say(repo, issue.number, role, "▶ Approval gate cleared automatically (Lazy Julian Mode).");
+        } else {
+          recordIssueStatus(repo, issue.number, setBlocked(withStatus("planned"), "awaitingApproval"));
+          await say(repo, issue.number, role, "⏸ **Approval needed** to continue — press **Approve** on the dashboard.");
+          return;
+        }
       }
-      route = gate.route;
+      route = gate.route || "continue"; // a humanApproval gate cleared by lazy mode may carry no route
     }
     if (route === "stop") break;
     if (route.startsWith("loop:")) {

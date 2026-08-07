@@ -22,6 +22,7 @@ export function GeneralSection({ data, reload, admin }) {
   const [analyzerRepo, setAnalyzerRepo] = useState(ops.analyzer_repo || "");
   const [keyRevealed, setKeyRevealed] = useState(false);
   const analyzerKey = (data.analyzer && data.analyzer.keyForAdmin) || "";
+  const [lazyOn, setLazyOn] = useState(ops.lazy_mode != null ? !!ops.lazy_mode : false);
   const [upstreamOn, setUpstreamOn] = useState(ops.upstream_contrib_enabled != null ? !!ops.upstream_contrib_enabled : false);
   const [upstreamRepo, setUpstreamRepo] = useState(ops.upstream_repo != null ? ops.upstream_repo : "ArneNostitz/dev-agency");
   const put = (body) => api("/settings", body).then(saved).then(reload).catch(failed);
@@ -43,7 +44,11 @@ export function GeneralSection({ data, reload, admin }) {
     <label style="margin-top:10px">Max tokens per run (0 = off)</label>
     <input type="number" min="0" step="50000" value=${maxTok} onInput=${(e) => { setMaxTok(e.target.value); later(() => put({ maxTokensPerRun: Number(e.target.value) || 0 })); }}/>
 
-    ${admin ? html`<div class="sec" style="margin-top:18px">Automation</div>
+    ${admin ? html`<div class="sec" style="margin-top:18px">Lazy Julian Mode <span class="xbadge">experimental</span></div>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">Hands the whole agency to the Orchestrator: plans build without your sign-off, it decides what runs and in what order, answers agents' questions itself from the repo context, and merges green PRs. Issues fade into the background and this chat becomes the interface — it only comes back to you when the answer is genuinely yours to give (a credential, a priority call, money). Turn it off and every gate returns.</div>
+      <label class="ckline"><input type="checkbox" checked=${lazyOn} onChange=${(e) => { setLazyOn(e.target.checked); put({ ops: { lazy_mode: e.target.checked } }); }}/> Let the Orchestrator run everything</label>
+
+      <div class="sec" style="margin-top:18px">Automation</div>
       <label class="ckline"><input type="checkbox" checked=${selfImprove} onChange=${(e) => { setSelfImprove(e.target.checked); put({ ops: { self_improve: e.target.checked } }); }}/> Allow self-improvement PRs</label>
       <div class="muted" style="font-size:12px;margin:6px 0 4px">When this repo's own PR is ready to merge while other issues are still running, hold it (dashboard shows an "Update ready" chip) instead of self-merging immediately — merging redeploys the container mid-run. Off restores immediate self-merging.</div>
       <label class="ckline"><input type="checkbox" checked=${selfMergeHold} onChange=${(e) => { setSelfMergeHold(e.target.checked); put({ ops: { self_merge_hold: e.target.checked } }); }}/> Hold self-merges until other runs finish</label>

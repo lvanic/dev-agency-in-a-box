@@ -145,6 +145,7 @@ import {
 } from "./commands.js";
 import { markInterrupted, listInterrupted, bumpInterruptedAttempts, clearInterrupted } from "./db/deploy.js";
 import { shouldAutoResumeMarker, attemptSelfMerge, flushHeldUpdatesIfQuiet } from "./deploySafety.js";
+import { startLazyMode } from "./lazy.js";
 
 const MAX_AUTOFIX = 2;
 
@@ -1559,6 +1560,15 @@ async function main(): Promise<void> {
   mirrorAnalyzerKeyToShare(); // share the auto-gen key with a bundled analyzer sidecar (no-op if ANALYZER_KEY_FILE unset)
   startAutoResume(cfg);
   startAutoMode(cfg);
+  // Lazy Julian Mode (experimental, off by default): the Orchestrator becomes the scheduler. The
+  // loop re-reads the setting each tick, so toggling it in Settings takes effect without a redeploy.
+  startLazyMode(cfg, () => effectiveRepos(cfg), {
+    start: (repo, number) => forceStart(cfg, repo, number),
+    resume: (repo, number) => forceResume(cfg, repo, number, true),
+    fix: (repo, number) => forceFix(cfg, repo, number),
+    stop: (repo, number) => forceStop(cfg, repo, number),
+    ready: () => !shuttingDown && githubConfigured(cfg),
+  });
   startPreviewSweeper();
   // Both "watch" and "webhook" run the HTTP server (so the dashboard is always reachable — a
   // watch-mode deploy with no server is what made Coolify 502). The server's safety poll uses

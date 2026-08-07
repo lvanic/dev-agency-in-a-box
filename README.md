@@ -102,6 +102,16 @@ open a detail drawer with:
 
 `/history` has the full firehose, every run with its cost, and archive buttons.
 
+### Lazy Julian Mode (experimental)
+
+**Settings → General.** Off by default. Turn it on and the Orchestrator runs the whole agency:
+plans build with no sign-off, it decides what starts and in what order, answers the agents'
+questions itself, and merges green PRs. The board fades back and the orchestrator chat becomes the
+interface — say what you want, and it opens, starts, and ships the work, reporting each move in the
+chat. Questions only reach you when the answer is genuinely yours (a credential, a priority call,
+money), and even then they arrive in the chat rather than on an issue card. Every gate returns the
+moment you switch it off. Details: **[docs/lazy-julian-mode.md](docs/lazy-julian-mode.md)**.
+
 ---
 
 ## How it stays good and cheap

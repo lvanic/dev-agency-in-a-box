@@ -78,28 +78,30 @@ async function mountApp(opts = {}) {
   const webDir = join(HERE, "..", "web");
   const vendorUrl = pathToFileURL(join(webDir, "vendor", "standalone.mjs")).href;
   const tmpDir = mkdtempSync(join(tmpdir(), "daui-"));
+  // The browser serves these modules under /web/…, so a handful import each other by ABSOLUTE path
+  // (the vendor bundle, and e.g. AgencyLogo.js -> /web/lib/sound.js). Node can't resolve those from
+  // the temp dir, so rewrite EVERY "/web/…" specifier to a file URL under tmpDir — not just the
+  // vendor one, which is why a single new absolute import used to break the whole suite.
+  const tmpUrl = pathToFileURL(tmpDir).href.replace(/\/$/, "");
+  const rewrite = (src) =>
+    readFileSync(src, "utf8")
+      .split("/web/vendor/standalone.mjs").join(vendorUrl)
+      .split('"/web/').join('"' + tmpUrl + "/")
+      .split("'/web/").join("'" + tmpUrl + "/");
   // Copy the flat entry files + the atomic-design directory tree (components/atoms,
-  // components/molecules, components/organisms, lib/, data/). Rewrite the absolute vendor import
-  // to a file URL in every .js file.
+  // components/molecules, components/organisms, lib/, data/).
   const copyDir = (src, dest) => {
     mkdirSync(dest, { recursive: true });
     for (const entry of readdirSync(src)) {
       const srcPath = join(src, entry);
       const destPath = join(dest, entry);
-      if (statSync(srcPath).isDirectory()) {
-        copyDir(srcPath, destPath);
-      } else if (entry.endsWith(".js")) {
-        const content = readFileSync(srcPath, "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-        writeFileSync(destPath, content);
-      }
+      if (statSync(srcPath).isDirectory()) copyDir(srcPath, destPath);
+      else if (entry.endsWith(".js")) writeFileSync(destPath, rewrite(srcPath));
     }
   };
   // Copy the remaining flat .js files (core.js was retired in P6 — the UI now lives entirely in
   // components/, lib/, data/).
-  for (const f of ["layout", "app"]) {
-    const src = readFileSync(join(webDir, f + ".js"), "utf8").split("/web/vendor/standalone.mjs").join(vendorUrl);
-    writeFileSync(join(tmpDir, f + ".js"), src);
-  }
+  for (const f of ["layout", "app"]) writeFileSync(join(tmpDir, f + ".js"), rewrite(join(webDir, f + ".js")));
   // Copy the new directory tree (components/, lib/, data/).
   for (const dir of ["components", "lib", "data"]) {
     const srcDir = join(webDir, dir);
@@ -689,5 +691,40 @@ test("epic card nests its sub-issues and hides their standalone cards", async ()
   await new Promise((r) => setTimeout(r, 10));
   assert.doesNotMatch(root.innerHTML, /Nested child A/, "rows hidden after collapsing");
 
+  dom.window.close();
+});
+
+test("Lazy Julian Mode: chat opens itself, issues fade back, and an open question is surfaced", async () => {
+  const SAMPLE = {
+    user: { id: 1, username: "arne", role: "admin" }, authEnabled: true, onboarded: true,
+    repos: ["acme/app"], auto: {}, autoRepos: {}, github: { connected: true }, workflows: [],
+    active: [], runs: [], activity: [], spendToday: { costUsd: 0 }, session: {}, config: {},
+    lazy: { on: true, thread: "*", pendingAsk: "Which staging domain should previews point at?" },
+    issues: [
+      { repo: "acme/app", number: 1, title: "A planned task", state: "planned", updated_at: new Date().toISOString(), auto: {} },
+    ],
+  };
+  // The autopilot's own report already sits in the agency-wide thread, carrying a proposal — the
+  // confirm card must NOT render (lazy already created and started that work server-side).
+  const THREAD = { thread: [{ id: 1, role: "orchestrator", text: "Started acme/app#1.", meta: { proposal: { workflow: "full-build", issues: [{ title: "Something", scope: "x" }] } } }] };
+  const route = (u) => {
+    u = String(u);
+    if (u.includes("/data")) return SAMPLE;
+    if (u.includes("/orch")) return THREAD;
+    return {};
+  };
+  const { window, dom, root } = await mountApp({
+    view: "list",
+    fetch: async (u) => ({ ok: true, json: async () => route(u), text: async () => "" }),
+  });
+  await new Promise((r) => setTimeout(r, 200));
+  const h = root.innerHTML;
+  assert.ok(window.document.querySelector(".app.lazy"), "the app wears the lazy skin (issues fade)");
+  assert.ok(window.document.querySelector(".orch-compose"), "the chat opened itself — no toggle needed");
+  assert.match(h, /Lazy Julian Mode/, "the experimental banner explains what's running");
+  assert.match(h, /Which staging domain/, "the pending question is surfaced in the chat");
+  assert.ok(window.document.querySelector(".lazy-ask"), "the open question renders as its own card");
+  assert.ok(!window.document.querySelector(".oprop"), "no 'create issues' confirm card — lazy already did it");
+  assert.match(h, /A planned task/, "issues are faded, never removed — you can still take the wheel");
   dom.window.close();
 });

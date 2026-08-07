@@ -37,8 +37,9 @@ import { binaryAvailable } from "./runners/registry.js";
 import { installSpec, installCli, RUNNER_PACKAGES } from "./runners/install.js";
 import { allToolchains, getToolchain, toolchainStatus, isInstalling, listToolchainRequests, installToolchain, toolchainsDir, sharedBinDir, toolchainProgress, subscribeToolchains, addCustomToolchain, removeCustomToolchain, reconcileStuckInstalls, repoToolset, pinRepoToolchain } from "./toolchains.js";
 import { parseLegacyStatus, withStatus, setBlocked } from "./state.js";
-import { runOrchestratorChat, specAnchor, SPEC_ANCHOR_HEADING } from "./agents/orchestrator-chat.js";
-import { listOrchThread, clearOrchThread, setByAgent, addEpicChild } from "./store.js";
+import { runOrchestratorChat, createProposalIssues } from "./agents/orchestrator-chat.js";
+import { listOrchThread, clearOrchThread, setByAgent, appendOrchMsg } from "./store.js";
+import { lazyEnabled, clearPendingAsk, pendingAsk, LAZY_THREAD } from "./lazy.js";
 import { getIssueBudget, setIssueBudget } from "./budget.js";
 import { renderShell } from "./shell.js";
 import { afterMerge } from "./merge_hooks.js";
@@ -648,6 +649,9 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
               repos: effectiveRepos(cfg),
               scanning: running, // a GitHub scan/refresh is in progress (drives the reload spinner)
               auto: { resume: getAutoRaw("resume"), merge: getAutoRaw("merge") },
+              // Lazy Julian Mode (experimental): drives the dashboard's autopilot skin — issues fade
+              // back, the orchestrator chat stays open, and any open question is surfaced there.
+              lazy: { on: lazyEnabled(), thread: LAZY_THREAD, pendingAsk: pendingAsk() },
               autoRepos: Object.fromEntries(
                 effectiveRepos(cfg).map((r) => [r, { resume: getAutoRaw("resume", r), merge: getAutoRaw("merge", r) }]),
               ),
@@ -2127,9 +2131,32 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           const text = (p.body ?? "").trim();
           if (!repo) return res.writeHead(400).end(JSON.stringify({ error: "repo required" }));
           if (!text) return res.writeHead(400).end(JSON.stringify({ error: "empty message" }));
+          // Lazy Julian Mode: the user talking IS the answer to whatever the autopilot last asked.
+          if (lazyEnabled()) clearPendingAsk();
           try {
             const r = await runOrchestratorChat(repo, text);
-            return ok(JSON.stringify({ ok: true, reply: r.reply, proposal: r.proposal, thread: listOrchThread(repo, 200) }));
+            // Lazy Julian Mode: no "Create N issues" button — a proposal is created and started on
+            // the spot. Anything the Orchestrator couldn't target at a real repo is skipped and said
+            // so in the thread rather than silently dropped.
+            if (lazyEnabled() && r.proposal) {
+              const tok = ghUserToken() || ghBotToken();
+              if (!tok) {
+                appendOrchMsg(repo, "orchestrator", "⚠ I'd have created those issues, but there's no GitHub token — add one in Settings → credentials.");
+              } else {
+                const created = await createProposalIssues(r.proposal, {
+                  threadRepo: repo,
+                  fallbackRepo: repo === "*" ? "" : repo,
+                  token: tok,
+                  note: "Opened by the 🧭 Orchestrator in Lazy Julian Mode — started automatically.",
+                }).catch((e) => { appendOrchMsg(repo, "orchestrator", `⚠ Couldn't create the issues — ${(e as Error).message}`); return []; });
+                for (const c of created) { if (start) void start(c.repo, c.number).catch(() => {}); }
+                const missed = (r.proposal.issues?.length ?? 0) - created.length;
+                appendOrchMsg(repo, "orchestrator", created.length
+                  ? `▶ Created and started ${created.length} issue${created.length > 1 ? "s" : ""}:\n${created.map((c) => `- ${c.repo}#${c.number} ${c.title}`).join("\n")}${missed > 0 ? `\n\n⚠ Skipped ${missed} — no target repository named.` : ""}`
+                  : "⚠ Nothing was created — the proposal didn't name a target repository.");
+              }
+            }
+            return ok(JSON.stringify({ ok: true, reply: r.reply, proposal: lazyEnabled() ? null : r.proposal, thread: listOrchThread(repo, 200) }));
           } catch (err) {
             return res.writeHead(500).end(JSON.stringify({ error: `Orchestrator failed — ${(err as Error).message}` }));
           }
@@ -2144,59 +2171,22 @@ export async function runWebhook(cfg: Config, processAll: ProcessAll, resume?: R
           // and presses Start). DB-first markers; GitHub is only the mirror.
           if (!repo) return res.writeHead(400).end(JSON.stringify({ error: "repo required" }));
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return res.writeHead(400).end(JSON.stringify({ error: `Bad repo "${repo}"` }));
-          const ph = p as { workflow?: string; epic?: string; issues?: Array<{ title?: string; scope?: string; route?: string }> };
-          const wf = (ph.workflow ?? "full-build");
-          const HANDLE: Record<string, string> = { "quick-fix": "@quickfix", "full-build": "@build", "plan-only": "@planonly", "split": "@split" };
-          const fallbackRoute = HANDLE[wf] ?? "@build";
+          const ph = p as { workflow?: string; epic?: string; issues?: Array<{ title?: string; scope?: string; route?: string; repo?: string }> };
           const issues = Array.isArray(ph.issues) ? ph.issues : [];
           if (!issues.length) return res.writeHead(400).end(JSON.stringify({ error: "no issues to create" }));
           const userTok = ghUserToken();
           if (!userTok) return res.writeHead(409).end(JSON.stringify({ error: "Add your GitHub token in Settings → credentials so the agency can create issues." }));
-          const created: Array<{ number: number; title: string; url: string }> = [];
-          // The user's own words, pinned onto EVERY issue this handoff creates. Slicing is lossy —
-          // the scope lines are the Orchestrator's paraphrase — so each agent (and the reviewer's
-          // spec gate) needs the original request to check against. Read once, outside the loop.
-          const anchor = specAnchor(repo);
-          const anchorBlock = anchor
-            ? `\n\n${SPEC_ANCHOR_HEADING}\nThis issue is one slice of the request below. Your work must satisfy the part of it that falls in this issue's scope — if the scope and this spec disagree, the spec wins, and say so rather than silently narrowing.\n\n<details><summary>Original request</summary>\n\n${anchor}\n\n</details>`
-            : "";
-          // Ordered, dependent slices become ONE epic instead of N top-level issues: the epic's
-          // ▶ Play starts the next sub-issue as each one merges (onChildMerged), so the user clicks
-          // once rather than starting and merging every part by hand.
-          const epicTitle = (ph.epic ?? "").trim();
-          let epicParent = 0;
           try {
-            if (epicTitle && issues.length > 1) {
-              const parts = issues.map((it, n) => `${n + 1}. ${(it.title ?? "").trim()}`).join("\n");
-              const parentBody = `Epic — built as ${issues.length} sub-issues, in order:\n\n${parts}${anchorBlock}\n\nProposed by the 🧭 Orchestrator from a chat.`;
-              const par = await createIssue(repo, epicTitle, parentBody, userTok);
-              if (par.number) {
-                epicParent = par.number;
-                recordIssueStatus(repo, par.number, withStatus("planned"), { title: epicTitle });
-                setByAgent(repo, par.number, true);
-                created.push({ number: par.number, title: epicTitle, url: par.url });
-              }
-            }
-            for (let n = 0; n < issues.length; n++) {
-              const it = issues[n];
-              const title = (it.title ?? "").trim();
-              if (!title) continue;
-              const pos = issues.length > 1 ? `\n\n— Part ${n + 1} of ${issues.length}.` : "";
-              const parentRef = epicParent ? `\n\nPart of epic #${epicParent}.` : "";
-              const body = `${(it.scope ?? "").trim()}${pos}${parentRef}${anchorBlock}\n\nProposed by the 🧭 Orchestrator from a chat.`;
-              const c = await createIssue(repo, title, body, userTok);
-              if (!c.number) continue;
-              if (epicParent) addEpicChild(repo, epicParent, c.number, title);
-              recordIssueStatus(repo, c.number, withStatus("planned"), { title });
-              setByAgent(repo, c.number, true);
-              // Route STRUCTURALLY (issue #140): the Orchestrator's per-issue recommendation
-              // (a workflow trigger or a single-agent handle), else the proposal-level workflow.
-              const route = (it.route || fallbackRoute).trim().toLowerCase();
-              const routeWf = resolveWorkflow(route);
-              if (routeWf) setIssueWorkflow(repo, c.number, routeWf.id);
-              else setSetting(`issue_role_pin.${repo}#${c.number}`, route);
-              created.push({ number: c.number, title, url: c.url });
-            }
+            // Spec anchor, epic wrapping and structural routing all live in createProposalIssues —
+            // shared with Lazy Julian Mode's button-free path (agents/orchestrator-chat.ts).
+            const created = await createProposalIssues(
+              {
+                workflow: ph.workflow ?? "full-build",
+                ...(ph.epic ? { epic: ph.epic } : {}),
+                issues: issues.map((i) => ({ title: i.title ?? "", scope: i.scope ?? "", ...(i.route ? { route: i.route } : {}), ...(i.repo ? { repo: i.repo } : {}) })),
+              },
+              { threadRepo: repo, fallbackRepo: repo, token: userTok },
+            );
             return ok(JSON.stringify({ ok: true, created }));
           } catch (err) {
             return res.writeHead(500).end(JSON.stringify({ error: `Couldn't create issues — ${(err as Error).message}` }));

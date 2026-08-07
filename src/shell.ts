@@ -1321,6 +1321,16 @@ textarea{resize:vertical;min-height:64px}
   .pt-issue{width:auto}
   .pt-act-lbl{display:none}
 }
+/* ── Lazy Julian Mode (experimental): the chat is the interface, issues recede ── */
+.xbadge{display:inline-block;margin-left:7px;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);background:var(--accent-weak);vertical-align:middle}
+/* Faded, but never inert — you can still open any issue and take the wheel back. */
+.lazy .slot--main,.lazy .workspace__single{opacity:.42;filter:saturate(.55);transition:opacity .25s ease,filter .25s ease}
+.lazy .slot--main:hover,.lazy .slot--main:focus-within,.lazy .workspace__single:hover,.lazy .workspace__single:focus-within{opacity:1;filter:none}
+.lazybar{display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:12.5px;color:var(--ink-1);background:var(--accent-weak);border-bottom:1px solid var(--line)}
+.lazybar b{color:var(--ink)}
+.lazybar .lazybar-x{margin-left:auto;flex:none}
+.lazy-ask{border:1px solid var(--accent);background:var(--accent-weak);border-radius:var(--radius);padding:10px 12px;margin-bottom:12px}
+.lazy-ask-h{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--accent);margin-bottom:4px}
 /* ── v4 Orchestrator chat ── */
 .orch{display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:420px;max-width:860px;margin:0 auto;border:1px solid var(--line);border-radius:16px;background:var(--surface);overflow:hidden}
 .orch-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}

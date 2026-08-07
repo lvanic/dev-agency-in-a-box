@@ -63,9 +63,11 @@ function ProposalCard({ repo, proposal, reload, onOpenIssue }) {
   </div>`;
 }
 
-function Bubble({ m, repo, reload, onOpenIssue, onPick, active }) {
+// `lazy` hides the confirm card: in Lazy Julian Mode the proposal was already created and started
+// server-side (webhook /orch-chat), so a "Create N issues" button would only duplicate the work.
+function Bubble({ m, repo, reload, onOpenIssue, onPick, active, lazy }) {
   const isUser = m.role === "user";
-  const proposal = m.meta && m.meta.proposal ? m.meta.proposal : null;
+  const proposal = !lazy && m.meta && m.meta.proposal ? m.meta.proposal : null;
   const question = m.meta && m.meta.question ? m.meta.question : null;
   return html`<div class=${"obub " + (isUser ? "obub-user" : "obub-orch")}>
     ${isUser ? null : html`<span class="obub-av"><${Avatar} role="orchestrator" size=${48} crop="full"/></span>`}
@@ -77,7 +79,7 @@ function Bubble({ m, repo, reload, onOpenIssue, onPick, active }) {
   </div>`;
 }
 
-export function Orchestrator({ repos, repoFilter, setRepoFilter, reload, onOpenIssue, issues = [], onAnalyze, auditRepos = [], onClose }) {
+export function Orchestrator({ repos, repoFilter, setRepoFilter, reload, onOpenIssue, issues = [], onAnalyze, auditRepos = [], onClose, lazy = false, pendingAsk = "" }) {
   const repo = repoFilter || "*"; // "*" = agency-wide chat across all repos
   const isAgency = repo === "*";
   const repoLabel = isAgency ? "all repositories" : repo.split("/").pop();
@@ -94,6 +96,17 @@ export function Orchestrator({ repos, repoFilter, setRepoFilter, reload, onOpenI
     getJSON("/orch?repo=" + encodeURIComponent(repo)).then((d) => setThread(d.thread || [])).catch(() => setThread([])).finally(() => setLoading(false));
   }, [repo]);
   useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [thread, busy]);
+  // Lazy Julian Mode: the autopilot appends to this thread on its own timer (src/lazy.ts), so the
+  // chat has to pull. Skipped while a turn is in flight (that response replaces the thread anyway)
+  // and while the tab is hidden.
+  useEffect(() => {
+    if (!lazy || !repo) return;
+    const t = setInterval(() => {
+      if (busy || (typeof document !== "undefined" && document.hidden)) return;
+      getJSON("/orch?repo=" + encodeURIComponent(repo)).then((d) => setThread(d.thread || [])).catch(() => {});
+    }, 15000);
+    return () => clearInterval(t);
+  }, [lazy, repo, busy]);
 
   // The shared ChatComposer handled uploads and folded attachment markdown into `full`.
   function sendFull(full) {
@@ -125,7 +138,12 @@ export function Orchestrator({ repos, repoFilter, setRepoFilter, reload, onOpenI
       <button class="iconbtn ghost" data-tip="New conversation" aria-label="New conversation" onClick=${clear}><${Icon} name="trash" size=${16}/></button>
       ${onClose ? html`<button class="iconbtn ghost" data-tip="Hide chat" aria-label="Hide chat" onClick=${onClose}><${Icon} name="x" size=${18}/></button>` : null}
     </div>
+    ${lazy ? html`<div class="lazybar"><${Icon} name="sparkles" size=${14}/> <span><b>Lazy Julian Mode</b> — the Orchestrator is running everything: no approvals, no manual merges. It only stops here when the call is yours.</span></div>` : null}
     <div class="orch-scroll" ref=${scrollRef}>
+      ${lazy && pendingAsk ? html`<div class="lazy-ask">
+        <div class="lazy-ask-h"><${Icon} name="alert" size=${13}/> Waiting on you</div>
+        <div dangerouslySetInnerHTML=${{ __html: md(pendingAsk) }}></div>
+      </div>` : null}
       ${live.length ? html`<div class="orch-livecmt">
         <div class="orch-livecmt-h"><span class="orch-live-dot"></span> Working now · ${live.length}</div>
         ${live.map((i) => { const sf = statusField(i); return html`<button class="orch-livecmt-row" key=${i.repo + "#" + i.number} onClick=${() => onOpenIssue && onOpenIssue(i.repo, i.number, i.title)}>
@@ -134,11 +152,13 @@ export function Orchestrator({ repos, repoFilter, setRepoFilter, reload, onOpenI
         </button>`; })}
       </div>` : null}
       ${loading ? html`<div class="empty" style="padding:30px;text-align:center"><${Spinner} size=${18}/></div>`
-        : thread.length ? thread.map((m, i) => html`<${Bubble} key=${m.id} m=${m} repo=${repo} reload=${reload} onOpenIssue=${onOpenIssue} onPick=${sendFull} active=${i === thread.length - 1 && !busy}/>`)
+        : thread.length ? thread.map((m, i) => html`<${Bubble} key=${m.id} m=${m} repo=${repo} reload=${reload} onOpenIssue=${onOpenIssue} onPick=${sendFull} active=${i === thread.length - 1 && !busy} lazy=${lazy}/>`)
         : html`<div class="orch-empty">
             <div class="obki"><${Icon} name="sparkles" size=${26}/></div>
             <div class="obh">What can I help with in ${repoLabel}?</div>
-            <div class="obsub">Describe an idea, ask what's feasible, or sketch a feature. When it's ready, I'll propose scoped issues you can create with one click — or just say “quick fix: …” for a one-liner.</div>
+            <div class="obsub">${lazy
+              ? html`Tell me what you want and I'll take it from there — I open the issues, order the work, answer the agents, and merge. I'll report everything here and only interrupt you when the decision is genuinely yours.`
+              : html`Describe an idea, ask what's feasible, or sketch a feature. When it's ready, I'll propose scoped issues you can create with one click — or just say “quick fix: …” for a one-liner.`}</div>
           </div>`}
       ${busy ? html`<div class="obub obub-orch"><span class="obub-av"><${Avatar} role="orchestrator" size=${48} crop="full"/></span><div class="obub-body"><div class="obub-txt obub-think"><${Spinner} size=${13}/> thinking…</div></div></div>` : null}
     </div>

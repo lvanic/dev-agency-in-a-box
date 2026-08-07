@@ -6,14 +6,25 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appendOrchMsg, listOrchThread, recentIssues, getSession, setSession, recordRun, filesFor, listEpicChildren, recentChanges, getIssueDigest, listWatchedRepos } from "../store.js";
+import { appendOrchMsg, listOrchThread, recentIssues, getSession, setSession, recordRun, filesFor, listEpicChildren, recentChanges, getIssueDigest, listWatchedRepos, recordIssueStatus, setByAgent, setIssueWorkflow, setSetting, addEpicChild } from "../store.js";
 import { activeClaims } from "../locks.js";
+import { withStatus } from "../state.js";
+import { createIssue } from "../github.js";
+import { resolveWorkflow } from "../workflow.js";
 import { resolveChatExec, chatBaseEnv, chatWorkdir } from "./chat.js";
 import { runLLM } from "../runners/exec.js";
 import type { Provider } from "../db/providers.js";
 import { recallWiring, RECALL_PROMPT } from "./recall.js";
+import { lazyEnabled } from "../lazy.js";
 
-export interface HandoffIssue { title: string; scope: string; route?: string }
+export interface HandoffIssue {
+  title: string;
+  scope: string;
+  route?: string;
+  /** Target repository, when the proposal came from the agency-wide (`*`) thread and has to say
+   *  which repo each slice belongs to. Falls back to the proposal's, then the caller's. */
+  repo?: string;
+}
 export interface HandoffProposal {
   workflow: string;
   issues: HandoffIssue[];
@@ -21,12 +32,15 @@ export interface HandoffProposal {
    *  under. An epic auto-advances (▶ Play starts the next sub-issue as each one merges), whereas
    *  flat issues make the user start and merge every part by hand. */
   epic?: string;
+  /** Block-level target repository — the default for every issue that doesn't name its own. */
+  repo?: string;
 }
 export interface OrchQuestion { options: string[]; multi: boolean }
 export interface OrchReply { reply: string; proposal: HandoffProposal | null; question: OrchQuestion | null }
 
 const VALID_WF = new Set(["quick-fix", "full-build", "plan-only", "split"]);
 const ORCH_ROLE = "orchestrator";
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
 /** Heading that marks the verbatim original request inside a generated issue body. Agents and the
  *  reviewer look for exactly this string — keep the two in sync (see SPEC_GATE in pipeline.ts). */
@@ -92,11 +106,17 @@ export function specAnchor(repo: string, limit = 4000): string {
   return joined.length > limit ? joined.slice(0, limit) + "\n\n…(truncated)" : joined;
 }
 
-/** Pull an optional `{agent: @x}` / `{workflow: @y}` route recommendation off an issue line. */
-function extractRoute(s: string): { scope: string; route?: string } {
-  const m = /\{\s*(agent|workflow)\s*:\s*(@[\w-]+)\s*\}/i.exec(s);
-  if (!m) return { scope: s.trim() };
-  return { scope: s.replace(m[0], "").trim(), route: m[2].toLowerCase() };
+/** Pull the optional `{agent: @x}` / `{workflow: @y}` route and `{repo: owner/name}` target off an
+ *  issue line. The repo annotation only matters in the agency-wide (`*`) thread, where a proposal
+ *  has to name which repository each issue belongs to. */
+function extractRoute(s: string): { scope: string; route?: string; repo?: string } {
+  let scope = s;
+  let route: string | undefined, repo: string | undefined;
+  const r = /\{\s*(agent|workflow)\s*:\s*(@[\w-]+)\s*\}/i.exec(scope);
+  if (r) { scope = scope.replace(r[0], ""); route = r[2].toLowerCase(); }
+  const rp = /\{\s*repo\s*:\s*([\w.-]+\/[\w.-]+)\s*\}/i.exec(scope);
+  if (rp) { scope = scope.replace(rp[0], ""); repo = rp[1]; }
+  return { scope: scope.trim(), ...(route ? { route } : {}), ...(repo ? { repo } : {}) };
 }
 
 /** Parse the trailing ```handoff block (if any) into a structured proposal; tolerant of small drift. */
@@ -105,22 +125,104 @@ export function parseHandoff(text: string): HandoffProposal | null {
   if (!m) return null;
   const lines = m[1].split("\n").map((l) => l.trim()).filter(Boolean);
   let workflow = "";
+  let repo: string | undefined;
   let epic = "";
   const issues: HandoffIssue[] = [];
   for (const line of lines) {
     const wf = line.match(/^workflow\s*:\s*(.+)$/i);
     if (wf) { workflow = wf[1].trim().toLowerCase().replace(/\s+/g, "-"); continue; }
+    const rp = line.match(/^repo\s*:\s*(.+)$/i);
+    if (rp) { const v = rp[1].trim(); if (REPO_RE.test(v)) repo = v; continue; }
     const ep = line.match(/^epic\s*:\s*(.+)$/i);
     if (ep) { epic = ep[1].trim(); continue; }
     const it = line.match(/^[-*]\s*\[(.+?)\]\s*(.*)$/);
-    if (it) { const r = extractRoute(it[2]); issues.push({ title: it[1].trim(), scope: r.scope, ...(r.route ? { route: r.route } : {}) }); continue; }
+    if (it) { const r = extractRoute(it[2]); issues.push({ title: it[1].trim(), scope: r.scope, ...(r.route ? { route: r.route } : {}), ...(r.repo ? { repo: r.repo } : {}) }); continue; }
     const bare = line.match(/^[-*]\s+(.+)$/);
-    if (bare) { const r = extractRoute(bare[1]); issues.push({ title: r.scope.slice(0, 80), scope: r.scope, ...(r.route ? { route: r.route } : {}) }); }
+    if (bare) { const r = extractRoute(bare[1]); issues.push({ title: r.scope.slice(0, 80), scope: r.scope, ...(r.route ? { route: r.route } : {}), ...(r.repo ? { repo: r.repo } : {}) }); }
   }
   if (!VALID_WF.has(workflow)) workflow = issues.length > 1 ? "split" : "full-build";
   if (!issues.length) return null;
   // An "epic" of one is just an issue — don't wrap a single slice in a parent that adds a click.
-  return { workflow, issues, ...(epic && issues.length > 1 ? { epic } : {}) };
+  return { workflow, issues, ...(epic && issues.length > 1 ? { epic } : {}), ...(repo ? { repo } : {}) };
+}
+
+const HANDLE_FOR_WF: Record<string, string> = { "quick-fix": "@quickfix", "full-build": "@build", "plan-only": "@planonly", "split": "@split" };
+
+export interface CreatedIssue { repo: string; number: number; title: string; url: string }
+
+export interface CreateProposalOpts {
+  /** The chat thread the proposal came from — where the verbatim spec anchor is read. */
+  threadRepo: string;
+  /** Target for any issue the proposal didn't tag with its own repo ("" in the agency-wide thread,
+   *  where an untagged issue is skipped rather than guessed at). */
+  fallbackRepo: string;
+  token: string;
+  /** Provenance line appended to every body. */
+  note?: string;
+}
+
+/**
+ * Turn a confirmed proposal into real issues: PLANNED, tagged by-agent, carrying the user's verbatim
+ * request (the spec anchor), and routed STRUCTURALLY (issue #140 — a workflow/role pin in the DB,
+ * never an @-handle in the body). Ordered slices are wrapped in an EPIC parent so ▶ Play advances
+ * them automatically.
+ *
+ * Shared by the dashboard's "Create issues" button (/orch-handoff) and Lazy Julian Mode, which skips
+ * the button entirely.
+ */
+export async function createProposalIssues(proposal: HandoffProposal, opts: CreateProposalOpts): Promise<CreatedIssue[]> {
+  const { threadRepo, fallbackRepo, token } = opts;
+  const note = opts.note ?? "Proposed by the 🧭 Orchestrator from a chat.";
+  const fallbackRoute = HANDLE_FOR_WF[proposal.workflow] ?? "@build";
+  const issues = proposal.issues ?? [];
+  const repoFor = (it?: HandoffIssue): string => (it?.repo || proposal.repo || fallbackRepo || "").trim();
+
+  // The user's own words, pinned onto EVERY issue this handoff creates. Slicing is lossy — the scope
+  // lines are the Orchestrator's paraphrase — so each agent (and the reviewer's spec gate) needs the
+  // original request to check against. Read once, outside the loop.
+  const anchor = specAnchor(threadRepo);
+  const anchorBlock = anchor
+    ? `\n\n${SPEC_ANCHOR_HEADING}\nThis issue is one slice of the request below. Your work must satisfy the part of it that falls in this issue's scope — if the scope and this spec disagree, the spec wins, and say so rather than silently narrowing.\n\n<details><summary>Original request</summary>\n\n${anchor}\n\n</details>`
+    : "";
+
+  const created: CreatedIssue[] = [];
+  // Ordered, dependent slices become ONE epic instead of N top-level issues: the epic's ▶ Play starts
+  // the next sub-issue as each one merges (onChildMerged). An epic lives in a single repository, so a
+  // proposal that spans repos stays flat rather than forcing unrelated work under one parent.
+  const epicTitle = (proposal.epic ?? "").trim();
+  const epicRepo = repoFor(issues[0]);
+  const sameRepo = issues.every((it) => repoFor(it) === epicRepo);
+  let epicParent = 0;
+  if (epicTitle && issues.length > 1 && sameRepo && REPO_RE.test(epicRepo)) {
+    const parts = issues.map((it, n) => `${n + 1}. ${(it.title ?? "").trim()}`).join("\n");
+    const par = await createIssue(epicRepo, epicTitle, `Epic — built as ${issues.length} sub-issues, in order:\n\n${parts}${anchorBlock}\n\n${note}`, token);
+    if (par.number) {
+      epicParent = par.number;
+      recordIssueStatus(epicRepo, par.number, withStatus("planned"), { title: epicTitle });
+      setByAgent(epicRepo, par.number, true);
+      created.push({ repo: epicRepo, number: par.number, title: epicTitle, url: par.url });
+    }
+  }
+
+  for (let n = 0; n < issues.length; n++) {
+    const it = issues[n];
+    const title = (it.title ?? "").trim();
+    const repo = repoFor(it);
+    if (!title || !REPO_RE.test(repo)) continue; // no target repo → skip rather than guess
+    const pos = issues.length > 1 ? `\n\n— Part ${n + 1} of ${issues.length}.` : "";
+    const parentRef = epicParent ? `\n\nPart of epic #${epicParent}.` : "";
+    const c = await createIssue(repo, title, `${(it.scope ?? "").trim()}${pos}${parentRef}${anchorBlock}\n\n${note}`, token);
+    if (!c.number) continue;
+    if (epicParent) addEpicChild(epicRepo, epicParent, c.number, title);
+    recordIssueStatus(repo, c.number, withStatus("planned"), { title });
+    setByAgent(repo, c.number, true);
+    const route = (it.route || fallbackRoute).trim().toLowerCase();
+    const wf = resolveWorkflow(route);
+    if (wf) setIssueWorkflow(repo, c.number, wf.id);
+    else setSetting(`issue_role_pin.${repo}#${c.number}`, route);
+    created.push({ repo, number: c.number, title, url: c.url });
+  }
+  return created;
 }
 
 /** Strip the handoff block from the user-facing reply (the proposal is surfaced as a UI card). */
@@ -257,7 +359,11 @@ export async function runOrchestratorChat(repo: string, userText: string): Promi
       ? `You are the **agency-wide Orchestrator** spanning ALL repositories. Reason across repos; when proposing work, name the target repo.\n\n`
       : `You are the Orchestrator for the repository **${repo}**.\n\n`) +
     `## Live repo state (issues, what's in flight, epics, file ownership)\n${repoContext(repo)}\n\n` +
-    `When you propose work, route it to files NOT already owned by open issues. If an idea must touch a file another issue owns, say so and propose to SEQUENCE it after that issue (so the second builds on the first's change) rather than running in parallel — two agents must never edit the same file at once.\n\n${RECALL_PROMPT}`;
+    `When you propose work, route it to files NOT already owned by open issues. If an idea must touch a file another issue owns, say so and propose to SEQUENCE it after that issue (so the second builds on the first's change) rather than running in parallel — two agents must never edit the same file at once.\n\n` +
+    (lazyEnabled()
+      ? `## Lazy Julian Mode is ON (experimental)\nThere is no approve/start/merge button in play: anything you put in a \`handoff\` block is created AND started immediately, plans build without sign-off, and PRs auto-merge once reviewed and green. So propose only what you're prepared to have run right now, and tag every issue with its target repository — \`{repo: owner/name}\` on the line, or a single \`repo: owner/name\` line in the block. Between messages you also drive the work yourself on a timer; keep this chat as the running report.\n\n`
+      : "") +
+    RECALL_PROMPT;
 
   const resumeId = getSession(repo, 0, ORCH_ROLE) || undefined;
   let text = "";

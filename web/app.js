@@ -356,9 +356,15 @@ function App() {
     return () => { document.removeEventListener("mouseover", show); document.removeEventListener("mouseout", hide); };
   }, []);
   const working = (data.active || []).length;
+  // Lazy Julian Mode (experimental): the Orchestrator runs everything, so the chat is the interface.
+  // Force it open, fade the issue views back, and pin the chat to the agency-wide thread the
+  // autopilot reports into. The list stays clickable — taking the wheel back is one click away.
+  const lazy = (data.lazy && data.lazy.on) || false;
+  const lazyThread = (data.lazy && data.lazy.thread) || "*";
+  useEffect(() => { if (lazy && !chatOpen) setChatOpenP(true); }, [lazy]);
 
   return html`
-    <div class="app">
+    <div class=${"app" + (lazy ? " lazy" : "")}>
       <${TopBar} working=${working} scanning=${data.scanning} env=${data.env} theme=${theme} setTheme=${setThemeP} onSettings=${() => setSheet("settings")} onUsage=${() => setSheet("usage")} onAgents=${() => setSheet("workflows")} onManageRepos=${() => setSheet("repos")} repos=${repos} repoFilter=${repoFilter} setRepoFilter=${setRepoFilter} reload=${load} view=${view} setView=${setViewP} chatOpen=${chatOpen} setChatOpen=${setChatOpenP}/>
       ${data.secretsHealth ? html`<${SecretBanner} h=${data.secretsHealth} onFix=${() => setSheet("settings")}/>` : null}
       <div class="content">
@@ -367,7 +373,7 @@ function App() {
           const toolbar = html`<${StatStrip} counts=${statCounts} statFilter=${statFilter} setStatFilter=${setStatFilter} compact=${true}/>`;
           const listLeaf = html`<${ProgressTable} issues=${shown} repos=${repos} repoFilter=${repoFilter} compact=${detailOpen} openKey=${openKey} onOpen=${(i) => setOpenKey(i.repo + "#" + i.number)} onAddIssue=${(r) => openComposer(r)} onAnalyze=${(r) => act.audit(r)} auditRepos=${auditRepos} act=${act} data=${data} statFilter=${statFilter} setStatFilter=${setStatFilter} toolbarExtra=${toolbar}/>`;
           const boardLeaf = html`<${Board} issues=${shown} repos=${repos} repoFilter=${repoFilter} tab=${tab} isDesktop=${isDesktop} onOpen=${(i) => setOpenKey(i.repo + "#" + i.number)} onOpenChild=${openIssue} onAddRepo=${() => setSheet("addrepo")} onAddIssue=${(r) => openComposer(r)} onAnalyze=${(r) => act.audit(r)} auditRepos=${auditRepos} act=${act} data=${data} onOpenModels=${() => setSheet("models")}/>`;
-          const chatLeaf = html`<${Orchestrator} repos=${repos} repoFilter=${repoFilter} setRepoFilter=${setRepoFilter} reload=${load} onOpenIssue=${openIssue} issues=${issues} onAnalyze=${(r) => act.audit(r)} auditRepos=${auditRepos} onClose=${() => setChatOpenP(false)}/>`;
+          const chatLeaf = html`<${Orchestrator} repos=${repos} repoFilter=${lazy ? (lazyThread === "*" ? null : lazyThread) : repoFilter} setRepoFilter=${setRepoFilter} reload=${load} onOpenIssue=${openIssue} issues=${issues} onAnalyze=${(r) => act.audit(r)} auditRepos=${auditRepos} onClose=${lazy ? null : () => setChatOpenP(false)} lazy=${lazy} pendingAsk=${(data.lazy && data.lazy.pendingAsk) || ""}/>`;
           const detailLeaf = open ? html`<${Detail} key=${openKey} docked=${true} issue=${open} activity=${activity} act=${act} isDesktop=${isDesktop} startError=${detailError} onClose=${() => { setOpenKey(null); setDetailError(null); }} onOpenIssue=${openIssue} data=${data} isOnline=${isOnline} onQueueComment=${oqPush} onOpenModels=${() => setSheet("models")}/>` : null;
           return html`<${Workspace} vw=${vw} view=${view} mainView=${view === "board" ? boardLeaf : listLeaf} chat=${chatLeaf} detail=${detailLeaf} chatOpen=${chatOpen} setChatOpen=${setChatOpenP} detailOpen=${detailOpen}/>`;
         })() : html`<${Board} issues=${shown} repos=${repos} repoFilter=${repoFilter} tab=${tab} isDesktop=${isDesktop} onOpen=${(i) => setOpenKey(i.repo + "#" + i.number)} onOpenChild=${openIssue} onAddRepo=${() => setSheet("addrepo")} onAddIssue=${(r) => openComposer(r)} onAnalyze=${(r) => act.audit(r)} auditRepos=${auditRepos} act=${act} data=${data} onOpenModels=${() => setSheet("models")}/>`}
