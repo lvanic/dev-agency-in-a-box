@@ -176,6 +176,11 @@ RUN set -eux; mkdir -p /app/data/toolchains /app/data/toolchains/bin /app/data/c
 RUN set -eux; rm -rf /home/node/.cargo /home/node/.rustup; \
     ln -sfn /app/data/cargo /home/node/.cargo; ln -sfn /app/data/rustup /home/node/.rustup
 RUN set -eux; chown node:node /app; chown -R node:node /app/data /app/.work /app/data/npm-global /app/data/toolchains /app/data/cargo /app/data/rustup
+# Создаем конфигурацию моделей для Pi, чтобы он знал про glm-5.3-flash
+RUN mkdir -p /home/node/.pi/agent && \
+    echo '{"providers":{"zai":{"models":[{"id":"glm-5.3-flash","name":"GLM-5.3 Flash","reasoning":true,"contextWindow":1000000,"maxTokens":131072,"cost":{"input":0.15,"output":0.5}}]}}}' > /home/node/.pi/agent/models.json && \
+    chown -R node:node /home/node/.pi
+
 RUN set -eux; chown -h node:node /home/node/.claude /home/node/.cargo /home/node/.rustup
 USER node
 
