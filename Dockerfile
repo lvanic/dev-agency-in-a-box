@@ -82,9 +82,11 @@ RUN if [ "$WITH_GITNEXUS" = "1" ]; then GITNEXUS_SKIP_OPTIONAL_GRAMMARS=1 npm in
 # pi (https://github.com/earendil-works/pi) — the `pi-cli` runner now uses pi IN-PROCESS via the
 # @earendil-works/pi-coding-agent SDK (a regular package.json dependency, installed by `npm install`
 # above). This optional global install only provides the `pi` CLI binary for users who want it
-# directly; the runner no longer needs it. WITH_PI=0 skips this (the SDK runner still works).
-RUN if [ "$WITH_PI" = "1" ]; then npm install -g --prefix /usr/local --ignore-scripts @earendil-works/pi-coding-agent \
-    || echo "pi CLI not installed (optional) — the in-process SDK runner works without it"; \
+# directly; the runner no longer needs it. WITH_PI=0 skips this (the in-process SDK runner still works).
+RUN if [ "$WITH_PI" = "1" ]; then \
+    npm install -g --prefix /usr/local --ignore-scripts @earendil-works/pi-coding-agent && \
+    npm install -g --prefix /usr/local --ignore-scripts pi-zcode \
+    || echo "pi CLI or pi-zcode not installed (optional) — the in-process SDK runner works without it"; \
     else echo "skip pi CLI (WITH_PI=0) — the in-process SDK runner works without it"; fi
 
 # Pre-install LadybugDB's FTS (full-text search) extension at BUILD time. GitNexus runs LadybugDB
